@@ -18,8 +18,19 @@
 
 set -euo pipefail
 
-OTP_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Resolve symlinks in the script path so `otp` invoked via ~/.local/bin/otp
+# (or any other symlink) still finds its lib/ directory. Handles chains and
+# both absolute and relative link targets without requiring `readlink -f`
+# (which is GNU-only; macOS only gained it in 12.3).
+_src="${BASH_SOURCE[0]}"
+while [[ -L "$_src" ]]; do
+  _dir="$(cd -P "$(dirname "$_src")" && pwd)"
+  _src="$(readlink "$_src")"
+  [[ "$_src" != /* ]] && _src="$_dir/$_src"
+done
+OTP_HOME="$(cd -P "$(dirname "$_src")" && pwd)"
 OTP_LIB="$OTP_HOME/lib"
+unset _src _dir
 export OTP_HOME OTP_LIB
 
 usage() { awk '/^#!/ {next} /^#/ {sub(/^# ?/,""); print; next} {exit}' "$0"; }
