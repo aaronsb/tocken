@@ -110,6 +110,26 @@ append_uri() {
   printf 'added %s\n' "$label"
 }
 
+# process_uris [COUNT_VAR]
+# Reads URIs from stdin, calls append_uri on each, prints a '✓/·/?' status
+# line per URI. If COUNT_VAR is the name of a variable in the caller's scope,
+# the number of newly-added entries is added to it (so callers can aggregate
+# across multiple captures — see cmd-reload.sh).
+process_uris() {
+  local ref="${1:-}"
+  local added=0 uri status
+  while IFS= read -r uri; do
+    [[ -z "$uri" ]] && continue
+    status="$(append_uri "$uri")"
+    case "$status" in
+      added*)     added=$((added+1)); printf '  ✓ %s\n' "$status" ;;
+      duplicate*) printf '  · %s\n' "$status" ;;
+      rejected*)  printf '  ? %s\n' "$status" ;;
+    esac
+  done
+  [[ -n "$ref" ]] && printf -v "$ref" '%d' $(( ${!ref:-0} + added ))
+}
+
 # decode_image IMAGE_PATH -> prints URIs on stdout, one per line (empty if none)
 decode_image() {
   require_bins zbarimg

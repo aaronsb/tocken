@@ -81,15 +81,7 @@ while true; do
     continue
   fi
 
-  while IFS= read -r uri; do
-    [[ -z "$uri" ]] && continue
-    status="$(append_uri "$uri")"
-    case "$status" in
-      added*)     new=$((new+1)); printf '  ✓ %s\n' "$status" ;;
-      duplicate*) printf '  · %s\n' "$status" ;;
-      rejected*)  printf '  ? %s\n' "$status" ;;
-    esac
-  done <<< "$decoded"
+  process_uris new <<< "$decoded"
 done
 
 echo

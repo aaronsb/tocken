@@ -36,14 +36,5 @@ esac
 decoded="$(decode_image "$img")"
 [[ -n "$decoded" ]] || die "no QR found in clipboard image"
 
-while IFS= read -r uri; do
-  [[ -z "$uri" ]] && continue
-  status="$(append_uri "$uri")"
-  case "$status" in
-    added*)     printf '  ✓ %s\n' "$status" ;;
-    duplicate*) printf '  · %s\n' "$status" ;;
-    rejected*)  printf '  ? %s\n' "$status" ;;
-  esac
-done <<< "$decoded"
-
+process_uris <<< "$decoded"
 expand_migrations
