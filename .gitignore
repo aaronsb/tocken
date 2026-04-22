@@ -1,0 +1,7 @@
+# secrets — never commit these
+secrets.txt
+secrets.txt.bak.*
+*.secrets
+
+# local machine state
+.claude/

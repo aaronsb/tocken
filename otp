@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# otp — entry point for the local TOTP store.
+#
+# Flows:
+#   otp reload             camera preview + snapshot loop; auto-expands
+#                          Google Authenticator migration blobs at end.
+#   otp clip               enroll QR from clipboard image (Flameshot /
+#                          KDE Spectacle → "copy image" first).
+#   otp file <path>        enroll QR(s) from image file.
+#   otp show [filter]      print current TOTP codes with countdowns.
+#   otp show -w [filter]   watch mode, refresh every second.
+#   otp expand             expand any migration blob(s) in the store
+#                          (camera/clip/file flows run this automatically).
+#
+# Override defaults with env vars OTP_HOME / OTP_STORE.
+
+set -euo pipefail
+
+OTP_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+OTP_LIB="$OTP_HOME/lib"
+export OTP_HOME OTP_LIB
+
+usage() { awk '/^#!/ {next} /^#/ {sub(/^# ?/,""); print; next} {exit}' "$0"; }
+
+cmd="${1:-}"
+[[ $# -gt 0 ]] && shift
+
+case "$cmd" in
+  reload)            exec "$OTP_LIB/cmd-reload.sh" "$@" ;;
+  clip|clipboard)    exec "$OTP_LIB/cmd-clip.sh"   "$@" ;;
+  file|img|image)    exec "$OTP_LIB/cmd-file.sh"   "$@" ;;
+  show|ls|list)      exec "$OTP_LIB/cmd-show.sh"   "$@" ;;
+  expand|decode)     exec "$OTP_LIB/cmd-expand.sh" "$@" ;;
+  ""|help|-h|--help) usage; exit 0 ;;
+  *) printf 'unknown command: %s\n\n' "$cmd" >&2; usage >&2; exit 2 ;;
+esac
