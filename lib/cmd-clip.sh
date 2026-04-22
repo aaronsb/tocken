@@ -12,16 +12,6 @@ tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 img="$tmp/clip.png"
 
-detect_session() {
-  if [[ -n "${WAYLAND_DISPLAY:-}" ]] || [[ "${XDG_SESSION_TYPE:-}" == wayland ]]; then
-    echo wayland
-  elif [[ -n "${DISPLAY:-}" ]]; then
-    echo x11
-  else
-    echo unknown
-  fi
-}
-
 case "$(detect_session)" in
   wayland)
     require_bins wl-paste

@@ -9,8 +9,10 @@
 #   otp file <path>        enroll QR(s) from image file.
 #   otp show [filter]      print current TOTP codes with countdowns.
 #   otp show -w [filter]   watch mode, refresh every second.
+#   otp copy <filter>      copy one TOTP code to the clipboard (auto-clears).
 #   otp expand             expand any migration blob(s) in the store
 #                          (camera/clip/file flows run this automatically).
+#   otp config <sub>       lifecycle: install / update / wipe / transfer
 #
 # Override defaults with env vars OTP_HOME / OTP_STORE.
 
@@ -30,7 +32,9 @@ case "$cmd" in
   clip|clipboard)    exec "$OTP_LIB/cmd-clip.sh"   "$@" ;;
   file|img|image)    exec "$OTP_LIB/cmd-file.sh"   "$@" ;;
   show|ls|list)      exec "$OTP_LIB/cmd-show.sh"   "$@" ;;
+  copy|cp|yank)      exec "$OTP_LIB/cmd-copy.sh"   "$@" ;;
   expand|decode)     exec "$OTP_LIB/cmd-expand.sh" "$@" ;;
+  config|cfg)        exec "$OTP_LIB/cmd-config.sh" "$@" ;;
   ""|help|-h|--help) usage; exit 0 ;;
   *) printf 'unknown command: %s\n\n' "$cmd" >&2; usage >&2; exit 2 ;;
 esac

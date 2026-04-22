@@ -28,6 +28,42 @@ ensure_store() {
 
 urldecode() { local s="${1//+/ }"; printf '%b' "${s//%/\\x}"; }
 
+detect_session() {
+  if [[ -n "${WAYLAND_DISPLAY:-}" ]] || [[ "${XDG_SESSION_TYPE:-}" == wayland ]]; then
+    echo wayland
+  elif [[ -n "${DISPLAY:-}" ]]; then
+    echo x11
+  else
+    echo unknown
+  fi
+}
+
+# Write stdin to system clipboard
+clipboard_write_text() {
+  case "$(detect_session)" in
+    wayland) require_bins wl-copy; wl-copy ;;
+    x11)     require_bins xclip;   xclip -selection clipboard -in ;;
+    *)       die "no display server (WAYLAND_DISPLAY / DISPLAY unset)" ;;
+  esac
+}
+
+# Read current clipboard text to stdout (may be empty; never errors on missing)
+clipboard_read_text() {
+  case "$(detect_session)" in
+    wayland) command -v wl-paste >/dev/null && wl-paste 2>/dev/null || true ;;
+    x11)     command -v xclip    >/dev/null && xclip -selection clipboard -o 2>/dev/null || true ;;
+    *)       return 0 ;;
+  esac
+}
+
+clipboard_clear() {
+  case "$(detect_session)" in
+    wayland) command -v wl-copy >/dev/null && wl-copy --clear 2>/dev/null || true ;;
+    x11)     command -v xclip   >/dev/null && printf '' | xclip -selection clipboard -in 2>/dev/null || true ;;
+    *)       return 0 ;;
+  esac
+}
+
 extract_label() {
   local uri="$1" raw
   raw="${uri#otpauth://*/}"
