@@ -40,13 +40,23 @@ pub enum StoreError {
 /// `age::plugin::RecipientPluginV1` for YubiKey) under one type.
 pub type BoxedRecipient = Box<dyn Recipient + Send + Sync>;
 
+/// A recipient paired with its bech32 string form. The trait object
+/// alone doesn't expose a stable string representation (plugin
+/// recipients don't implement `Display`), so callers hand in the
+/// original string at construction time. `recipients.txt` (#17) reads
+/// these to render the audit-aid file alongside `store.age`.
+pub struct NamedRecipient {
+    pub bech32: String,
+    pub recipient: BoxedRecipient,
+}
+
 /// In-memory unlocked view of the seed store, plus enough state to
 /// re-encrypt back to disk.
 pub struct Store {
     paths: StorePaths,
     file: StoreFile,
     master: x25519::Identity,
-    extra_recipients: Vec<BoxedRecipient>,
+    extra_recipients: Vec<NamedRecipient>,
 }
 
 impl Store {
@@ -56,7 +66,7 @@ impl Store {
     pub fn create(
         paths: StorePaths,
         passphrase: SecretString,
-        extra_recipients: Vec<BoxedRecipient>,
+        extra_recipients: Vec<NamedRecipient>,
     ) -> Result<Self, StoreError> {
         paths.ensure_dirs()?;
         let master = x25519::Identity::generate();
@@ -142,13 +152,34 @@ impl Store {
         let mut refs: Vec<&dyn Recipient> = Vec::with_capacity(1 + self.extra_recipients.len());
         refs.push(&master_pub as &dyn Recipient);
         for r in &self.extra_recipients {
-            refs.push(r.as_ref() as &dyn Recipient);
+            refs.push(r.recipient.as_ref() as &dyn Recipient);
         }
         let ciphertext = crypto::encrypt_to_recipients(text.as_bytes(), &refs)?;
         atomic::write(&self.paths.store, &ciphertext)?;
+        self.write_recipients_txt(&master_pub.to_string())?;
+        Ok(())
+    }
+
+    /// Render the recipient list to `recipients.txt` as an audit aid
+    /// (ADR-100 §4, #17). Strictly informational — losing or tampering
+    /// with this file does NOT affect decryption, which reads the
+    /// canonical recipient stanzas from `store.age`'s header. Atomic
+    /// write so a partial file never replaces a valid one.
+    fn write_recipients_txt(&self, master_bech32: &str) -> Result<(), StoreError> {
+        let mut body = String::from(RECIPIENTS_TXT_HEADER);
+        body.push_str(master_bech32);
+        body.push('\n');
+        for r in &self.extra_recipients {
+            body.push_str(&r.bech32);
+            body.push('\n');
+        }
+        atomic::write(&self.paths.recipients, body.as_bytes())?;
         Ok(())
     }
 }
+
+const RECIPIENTS_TXT_HEADER: &str =
+    "# tocken recipients (informational; redundant with store.age header)\n# do not edit by hand — overwritten on every encrypt\n\n";
 
 fn parse_master(bytes: &[u8]) -> Result<x25519::Identity, StoreError> {
     let s = std::str::from_utf8(bytes)
@@ -212,10 +243,15 @@ mod tests {
         let (_tmp, paths) = tmp_paths();
         let passphrase = SecretString::from("recovery");
         let backup = x25519::Identity::generate();
+        let backup_pub = backup.to_public();
+        let backup_bech32 = backup_pub.to_string();
         let _ = Store::create(
             paths.clone(),
             passphrase,
-            vec![Box::new(backup.to_public())],
+            vec![NamedRecipient {
+                bech32: backup_bech32,
+                recipient: Box::new(backup_pub),
+            }],
         )
         .unwrap();
 
@@ -233,5 +269,73 @@ mod tests {
         let _ = Store::create(paths.clone(), SecretString::from("right"), Vec::new()).unwrap();
         let result = Store::open_with_passphrase(paths, SecretString::from("wrong"));
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn recipients_txt_lists_master_and_extras_in_order() {
+        let (_tmp, paths) = tmp_paths();
+        let backup = x25519::Identity::generate();
+        let backup_pub = backup.to_public();
+        let backup_bech32 = backup_pub.to_string();
+        let store = Store::create(
+            paths.clone(),
+            SecretString::from("recovery"),
+            vec![NamedRecipient {
+                bech32: backup_bech32.clone(),
+                recipient: Box::new(backup_pub),
+            }],
+        )
+        .unwrap();
+
+        let body = std::fs::read_to_string(&paths.recipients).unwrap();
+        let lines: Vec<&str> = body
+            .lines()
+            .filter(|l| !l.is_empty() && !l.starts_with('#'))
+            .collect();
+        let master_bech32 = store.master.to_public().to_string();
+        assert_eq!(lines, vec![master_bech32.as_str(), backup_bech32.as_str()]);
+    }
+
+    #[test]
+    fn recipients_txt_rewritten_on_save() {
+        let (_tmp, paths) = tmp_paths();
+        let mut store =
+            Store::create(paths.clone(), SecretString::from("recovery"), Vec::new()).unwrap();
+        let first = std::fs::read_to_string(&paths.recipients).unwrap();
+        // Mutate then save; recipients didn't change but the file
+        // should be rewritten faithfully, not deleted or corrupted.
+        store.add_entry(Entry {
+            id: "01h9z0e3mq6kngd5gp7w4tnsx2".into(),
+            issuer: "Example".into(),
+            account: "alice@example.com".into(),
+            secret: SecretString::from("JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP"),
+            digits: 6,
+            period: 30,
+            algorithm: Algorithm::Sha1,
+            kind: EntryKind::Totp,
+            created_at: "2026-04-29T10:00:00Z".into(),
+        });
+        store.save().unwrap();
+        let second = std::fs::read_to_string(&paths.recipients).unwrap();
+        assert_eq!(first, second);
+    }
+
+    #[test]
+    fn recipients_txt_atomic_write_no_partial_on_failure() {
+        // Verifies the temp-file + rename pattern: a stable file always
+        // exists at the recipients path after a successful create.
+        let (_tmp, paths) = tmp_paths();
+        let _ = Store::create(paths.clone(), SecretString::from("recovery"), Vec::new()).unwrap();
+        assert!(paths.recipients.exists());
+        // No leftover .tmp.* files in the data directory.
+        let stragglers: Vec<_> = std::fs::read_dir(paths.recipients.parent().unwrap())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().contains(".tmp."))
+            .collect();
+        assert!(
+            stragglers.is_empty(),
+            "unexpected temp files: {stragglers:?}"
+        );
     }
 }

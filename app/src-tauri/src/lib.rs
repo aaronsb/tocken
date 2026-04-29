@@ -20,7 +20,7 @@ use tauri::{
 
 use session::unlock::{self, UnlockErrorIpc};
 use session::{EntryCode, Session};
-use store::{Store, StoreError, StorePaths};
+use store::{NamedRecipient, Store, StoreError, StorePaths};
 
 /// Tauri-managed global session.
 ///
@@ -213,7 +213,11 @@ fn finalize_init(passphrase: String, yubikey_recipient: String) -> Result<Finali
     })?;
 
     let secret = SecretString::from(passphrase);
-    Store::create(paths.clone(), secret, vec![recipient]).map_err(|e| {
+    let named = NamedRecipient {
+        bech32: yubikey_recipient.clone(),
+        recipient,
+    };
+    Store::create(paths.clone(), secret, vec![named]).map_err(|e| {
         eprintln!("finalize_init: Store::create failed: {e:#}");
         user_facing(&e)
     })?;
