@@ -122,6 +122,15 @@ fn lock(state: State<'_, SessionState>) -> Result<(), String> {
     Ok(())
 }
 
+#[tauri::command]
+fn hide_window(app: tauri::AppHandle, state: State<'_, SessionState>) -> Result<(), String> {
+    *state.lock().unwrap() = None;
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.hide();
+    }
+    Ok(())
+}
+
 #[derive(Serialize)]
 struct FinalizeResult {
     store_path: String,
@@ -284,7 +293,8 @@ pub fn run() {
             finalize_init,
             unlock,
             get_codes,
-            lock
+            lock,
+            hide_window
         ])
         .setup(|app| {
             let show_item = MenuItemBuilder::with_id("show", "Show / hide").build(app)?;

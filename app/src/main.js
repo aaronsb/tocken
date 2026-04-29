@@ -359,6 +359,14 @@ function initCodePanel(root) {
     // Re-fetch just past the next rollover. Pick the shortest
     // time_remaining among entries — that's when a code changes.
     // 200ms buffer to land safely after the period boundary.
+    if (response.codes.length === 0) {
+      // Empty store. Nothing to refresh on a period boundary; the
+      // backend's re-lock check still fires on its own when the user
+      // dismisses or the threshold is crossed via a future fetch.
+      // Don't schedule — Math.min(...[]) is Infinity and setTimeout
+      // would tight-loop.
+      return;
+    }
     const minRemaining = Math.min(
       ...response.codes.map((c) => c.time_remaining)
     );
@@ -434,13 +442,13 @@ function initCodePanel(root) {
       clearTimeout(refreshTimer);
       refreshTimer = null;
     }
+    // Same code path as tray-click-while-visible: drops the session
+    // and hides the window. JS state resets on the next window:shown.
     try {
-      await invoke("lock");
-    } catch (_) {}
-    // The window stays open but goes back to AWAITING_TOUCH on the
-    // next show. For now, hide the panel; tray click reopens.
-    showPane("awaiting");
-    subtitle.textContent = "locked";
+      await invoke("hide_window");
+    } catch (err) {
+      console.error("hide_window:", err);
+    }
   });
 
   revealBtn.addEventListener("click", () => {
@@ -452,11 +460,12 @@ function initCodePanel(root) {
   });
 
   // Backend emits "window:shown" when the user clicks the tray icon
-  // to bring the popup up. Reset to AWAITING_TOUCH each time.
+  // to bring the popup up. Reset to AWAITING_TOUCH each time. We do
+  // NOT auto-fire on DOMContentLoaded because the window is hidden at
+  // launch (tauri.conf.json: visible=false) — the LED would blink
+  // with the user unable to see it, time out, then fire again on the
+  // first tray click. Window:shown is the only entry point.
   listen("window:shown", () => {
     enterAwaiting();
   });
-
-  // Kick off on first DOMContentLoaded.
-  enterAwaiting();
 }
