@@ -11,7 +11,7 @@ use tauri::{
     LogicalPosition, Manager, Position,
 };
 
-use store::{Store, StorePaths};
+use store::{Store, StoreError, StorePaths};
 
 const SMOKE_TEST_PLAINTEXT: &[u8] = b"tocken: hardware-key flow OK";
 
@@ -34,14 +34,21 @@ struct DecryptStoreResult {
 
 #[tauri::command]
 fn decrypt_store(passphrase: String) -> Result<DecryptStoreResult, String> {
-    let paths = StorePaths::resolve().map_err(|e| e.to_string())?;
+    // TODO(#13): passphrase arrives as a String from the IPC layer and
+    // sits in the JS engine's heap before this point — full memory
+    // hygiene needs work on both sides.
+    let paths = StorePaths::resolve().map_err(|e| user_facing(&e.into()))?;
     let secret = SecretString::from(passphrase);
     let exists = paths.master.exists() && paths.store.exists();
-    let store = if exists {
-        Store::open_with_passphrase(paths, secret).map_err(|e| e.to_string())?
+    let store_result = if exists {
+        Store::open_with_passphrase(paths, secret)
     } else {
-        Store::create(paths, secret, Vec::new()).map_err(|e| e.to_string())?
+        Store::create(paths, secret, Vec::new())
     };
+    let store = store_result.map_err(|e| {
+        eprintln!("decrypt_store failed: {e:#}");
+        user_facing(&e)
+    })?;
     Ok(DecryptStoreResult {
         ok: true,
         entries: store.entries().len(),
@@ -49,6 +56,22 @@ fn decrypt_store(passphrase: String) -> Result<DecryptStoreResult, String> {
         master_path: store.paths().master.display().to_string(),
         created: !exists,
     })
+}
+
+/// Map StoreError to a small set of UI-safe reasons. Rich detail goes
+/// to stderr; the JS layer only sees a coarse string. Avoids leaking
+/// crypto internals or filesystem paths through error messages.
+fn user_facing(err: &StoreError) -> String {
+    match err {
+        StoreError::Crypto(_) => "could not decrypt — wrong passphrase or corrupted store",
+        StoreError::InvalidMaster(_) | StoreError::InvalidStorePayload(_) => {
+            "store contents are corrupted"
+        }
+        StoreError::TomlDe(_) | StoreError::TomlSer(_) => "store contents are corrupted",
+        StoreError::Atomic(_) | StoreError::Io(_) => "filesystem error",
+        StoreError::Paths(_) => "could not resolve storage path",
+    }
+    .into()
 }
 
 #[tauri::command]

@@ -8,6 +8,10 @@ use std::str::FromStr;
 use age::secrecy::{ExposeSecret, SecretString};
 use age::{x25519, Identity, Recipient};
 
+// TODO(#3, #9): these re-exports document the storage layer's public
+// surface. Consumed by the code panel state machine (#3) and account
+// management (#9); silence the dead-code warning in the meantime.
+#[allow(unused_imports)]
 pub use format::{Algorithm, Entry, EntryKind, StoreFile, STORE_FORMAT_VERSION};
 pub use paths::StorePaths;
 
@@ -25,6 +29,8 @@ pub enum StoreError {
     TomlDe(#[from] toml::de::Error),
     #[error("master.age does not contain a valid age identity: {0}")]
     InvalidMaster(&'static str),
+    #[error("store.age payload is malformed: {0}")]
+    InvalidStorePayload(&'static str),
     #[error("paths: {0}")]
     Paths(#[from] paths::PathError),
 }
@@ -76,7 +82,7 @@ impl Store {
         let plaintext =
             crypto::decrypt_with_identity(&store_ciphertext, &master as &dyn Identity)?;
         let text = std::str::from_utf8(&plaintext)
-            .map_err(|_| StoreError::InvalidMaster("store payload is not valid UTF-8"))?;
+            .map_err(|_| StoreError::InvalidStorePayload("not valid UTF-8"))?;
         let file = format::deserialize(text)?;
 
         Ok(Self {
@@ -89,6 +95,8 @@ impl Store {
 
     /// Re-encrypt and atomic-write `store.age` using the current
     /// recipient set (master pubkey + `extra_recipients`).
+    // TODO(#9): consumed by account management writes.
+    #[allow(dead_code)]
     pub fn save(&self) -> Result<(), StoreError> {
         self.write_store()
     }
@@ -97,10 +105,14 @@ impl Store {
         &self.file.entries
     }
 
+    // TODO(#9): consumed by account management; tests already exercise it.
+    #[allow(dead_code)]
     pub fn add_entry(&mut self, entry: Entry) {
         self.file.entries.push(entry);
     }
 
+    // TODO(#9): consumed by account management.
+    #[allow(dead_code)]
     pub fn remove_entry(&mut self, id: &str) -> bool {
         let before = self.file.entries.len();
         self.file.entries.retain(|e| e.id != id);

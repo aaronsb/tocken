@@ -12,7 +12,13 @@ pub struct StorePaths {
     pub config_dir: PathBuf,
     pub master: PathBuf,
     pub store: PathBuf,
+    // TODO(ADR-100 §4 audit aid, follow-up issue): write recipient
+    // strings here on every encrypt for human inspection. Redundant
+    // with the store.age header so not load-bearing.
+    #[allow(dead_code)]
     pub recipients: PathBuf,
+    // TODO(#3, #8): user-visible config (UX/behavior).
+    #[allow(dead_code)]
     pub config: PathBuf,
 }
 

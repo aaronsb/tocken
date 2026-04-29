@@ -1,10 +1,13 @@
 use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
-use zeroize::{Zeroize, ZeroizeOnDrop};
 
 pub const STORE_FORMAT_VERSION: u32 = 1;
 
-#[derive(Debug, Clone, Serialize, Deserialize, Zeroize, ZeroizeOnDrop)]
+// TODO(#13): wrap String fields in a Zeroizing/Secret type and apply
+// ZeroizeOnDrop. Today only `secret` self-zeroizes via SecretString; the
+// other fields plus parser intermediates leave heap residue. The derive
+// would be theatrical until #13 reworks the substrate.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Entry {
     pub id: String,
     pub issuer: String,
@@ -19,7 +22,7 @@ pub struct Entry {
     pub created_at: String,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, Zeroize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "UPPERCASE")]
 pub enum Algorithm {
     Sha1,
@@ -27,7 +30,7 @@ pub enum Algorithm {
     Sha512,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, Zeroize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum EntryKind {
     Totp,
