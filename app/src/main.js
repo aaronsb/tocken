@@ -421,9 +421,20 @@ function initCodePanel(root) {
     subtitle.textContent = "locked";
     showPane("awaiting");
 
+    // Order: dialog state first, then YubiKey input. Without this, the
+    // unlock invoke can fire before the browser has painted the
+    // awaiting pane, so the LED starts blinking with no visible UI
+    // confirmation of what's about to happen. Two rAFs guarantee the
+    // pane has committed; an additional ~150ms gives the user a beat
+    // to register the pulsing "Waiting for YubiKey touch..." banner
+    // before the LED comes alive.
+    await new Promise((r) =>
+      requestAnimationFrame(() => requestAnimationFrame(r))
+    );
+    await new Promise((r) => setTimeout(r, 150));
+
     // Per spike #23: age-plugin-yubikey doesn't emit a touch-prompt
-    // callback; the LED is the user signal. We invoke unlock the
-    // moment AWAITING_TOUCH renders so the blink starts immediately.
+    // callback; the LED is the user signal.
     let result;
     try {
       result = await invoke("unlock");
