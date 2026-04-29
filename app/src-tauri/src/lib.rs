@@ -3,12 +3,15 @@ mod store;
 use std::io::Write;
 use std::process::{Command, Stdio};
 
+use age::secrecy::SecretString;
 use serde::Serialize;
 use tauri::{
     menu::{MenuBuilder, MenuItemBuilder},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     LogicalPosition, Manager, Position,
 };
+
+use store::{Store, StorePaths};
 
 const SMOKE_TEST_PLAINTEXT: &[u8] = b"tocken: hardware-key flow OK";
 
@@ -18,6 +21,34 @@ struct TouchResult {
     message: String,
     serial: Option<String>,
     recipient: Option<String>,
+}
+
+#[derive(Serialize)]
+struct DecryptStoreResult {
+    ok: bool,
+    entries: usize,
+    store_path: String,
+    master_path: String,
+    created: bool,
+}
+
+#[tauri::command]
+fn decrypt_store(passphrase: String) -> Result<DecryptStoreResult, String> {
+    let paths = StorePaths::resolve().map_err(|e| e.to_string())?;
+    let secret = SecretString::from(passphrase);
+    let exists = paths.master.exists() && paths.store.exists();
+    let store = if exists {
+        Store::open_with_passphrase(paths, secret).map_err(|e| e.to_string())?
+    } else {
+        Store::create(paths, secret, Vec::new()).map_err(|e| e.to_string())?
+    };
+    Ok(DecryptStoreResult {
+        ok: true,
+        entries: store.entries().len(),
+        store_path: store.paths().store.display().to_string(),
+        master_path: store.paths().master.display().to_string(),
+        created: !exists,
+    })
 }
 
 #[tauri::command]
@@ -139,7 +170,7 @@ fn anchor_top_right(window: &tauri::WebviewWindow) -> tauri::Result<()> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![verify_touch])
+        .invoke_handler(tauri::generate_handler![verify_touch, decrypt_store])
         .setup(|app| {
             let show_item = MenuItemBuilder::with_id("show", "Show / hide").build(app)?;
             let quit_item = MenuItemBuilder::with_id("quit", "Quit").build(app)?;
