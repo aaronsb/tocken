@@ -21,4 +21,4 @@ _Crypto choices, threat model, key management, memory hygiene_
 | ADR | Title | Status |
 |-----|-------|--------|
 | [ADR-100](./security/ADR-100-encrypted-seed-store-format-and-recipient-model.md) | Encrypted seed store format and recipient model | Accepted |
-| [ADR-101](./security/ADR-101-totp-secret-length-compliance-posture.md) | TOTP secret-length compliance posture | Draft |
+| [ADR-101](./security/ADR-101-totp-secret-length-compliance-posture.md) | TOTP secret-length compliance posture | Accepted |
