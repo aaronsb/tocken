@@ -115,6 +115,49 @@ The store's recipient list is set when the file is encrypted and is fixed for th
 
 Removing a recipient does **not** retroactively invalidate copies of the old file — anyone with the removed key and an old copy can still decrypt it. This is a fundamental property of `age` (and of all envelope encryption). Documented as a limitation; not a bug.
 
+### 7. Threat model and design ceiling
+
+The design is calibrated against **software-side compromise** as the primary threat: malicious code running with user privileges (compromised npm package, Rust crate supply-chain attack, browser extension reading `~/.config/`, opportunistic malware). Such code can copy `master.age` and `store.age` but cannot perform a YubiKey touch.
+
+The `--touch-policy always` provisioning is the irreducible defense — the passphrase is never typed during normal use, and the YubiKey requires a physical gesture for any crypto operation. An attacker who exfiltrates the encrypted files holds **useless bytes** unless they also obtain *either* the passphrase via a separate channel (keylog during recovery, paper-backup theft, social engineering) *or* both physical possession of the YubiKey *and* the touch capability.
+
+| Threat | Defense |
+|---|---|
+| Malicious package exfiltrates `master.age` + `store.age` | Useless bytes — passphrase needed for `master.age`; YubiKey+touch needed for `store.age` |
+| Malicious package invokes `age-plugin-yubikey` programmatically | Blocked — kernel/PIV refuses crypto without touch |
+| Malicious package keylogs while user types passphrase | Passphrase only typed during recovery (rare event; user should run recovery on a clean machine) |
+| Lost / stolen YubiKey, attacker doesn't have files | Safe — files needed |
+| Lost / stolen YubiKey, attacker also gets files | Defense reduces to "removal flow" (§8) — stolen YubiKey is invalidated for *future* `store.age` versions; old copies remain decryptable |
+
+**Not defended (design ceiling — accepted):**
+- Attacker with system + YubiKey + passphrase simultaneously. Passphrase is the root of trust; if it's compromised alongside the artifacts, the design cannot save you.
+- Targeted state-level adversary with privileged access during an unlock window.
+- Hardware attacks on the YubiKey itself.
+
+**Considered and rejected for this threat model:**
+- **PIN policy beyond `never`.** Adds friction (PIN entry per session or per touch) without marginal defense against the primary threat — supply-chain malware that gets the PIN via keylog still cannot fake the touch, so the touch already gates the YubiKey path. PIN remains *available* as a provisioning-time choice for users with elevated physical-theft concerns; not a default.
+- **Composite key (passphrase AND YubiKey both required).** Would defend more cases but breaks the recovery property explicitly required by the user ("if I know the main secret, the blob is portable").
+- **Automatic master rotation.** Would give forward secrecy against time-staggered file leaks, at the cost of multi-machine sync friction (every rotation requires syncing both files to every device). Not justified by the primary threat. Manual rotation remains *available* as a lifecycle operation (§8) for users who want it.
+
+### 8. Lifecycle operations
+
+The store and master files are mutated by a small set of operations, all following a common shape: **decrypt → modify recipient set → re-encrypt → atomic-write**.
+
+| Operation | Trigger | Auth required | Effect |
+|---|---|---|---|
+| **Add recipient** | Provision a backup YubiKey, add a new device | Any current recipient (passphrase OR YubiKey) | New recipient added to `store.age`; existing recipients unchanged |
+| **Remove recipient (panic flow)** | Lost / stolen / suspect-compromised YubiKey | Any *other* current recipient — typically passphrase, since the YubiKey is the one being invalidated | Stripped recipient is invalidated for future versions; old copies remain decryptable per §6 |
+| **Rotate master** | Periodic refresh, suspected `master.age` leak | Passphrase + any current store recipient | New master keypair generated; new `master.age` written (same passphrase); `store.age` re-encrypted to new master pubkey |
+| **Combined rekey** | Annual hygiene, suspected broad compromise | Passphrase + YubiKey | All of the above in one transaction |
+
+A key property: **the passphrase alone is sufficient for any lifecycle operation**. No operation requires the YubiKey if the user has the passphrase. This is what makes the "lost YubiKey panic flow" work — the user opens settings, clicks "I lost my YubiKey", types the passphrase, and the missing YubiKey is removed from `store.age`'s recipient list. They can then provision a replacement (Add recipient) or operate passphrase-only until they do.
+
+Conversely: the YubiKey alone is sufficient for any operation that doesn't change the master (Add recipient, Remove recipient). Master rotation requires the passphrase because it generates a new master identity that must be encrypted with the passphrase to produce the new `master.age`.
+
+These operations are surfaced in the UI per #10 (backup & recovery). Defaults:
+- No automatic schedule for any operation
+- Annual reminder banner suggesting Combined rekey (configurable, can be disabled)
+
 ## Consequences
 
 ### Positive
