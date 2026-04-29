@@ -57,19 +57,8 @@ mod tests {
         assert_eq!(std::fs::read(&target).unwrap(), b"replaced");
     }
 
-    #[test]
-    fn does_not_corrupt_target_when_temp_write_fails() {
-        let dir = tempfile::tempdir().unwrap();
-        let target = dir.path().join("a.bin");
-        std::fs::write(&target, b"original").unwrap();
-
-        // Simulate "write fails" by attempting to write into a path whose
-        // parent doesn't exist after we've already populated `target`.
-        let bogus = dir.path().join("nope/x.bin");
-        let err = write(&bogus, b"replaced");
-        // Either succeeds (create_dir_all handled it) or fails — but the
-        // *original* target must remain intact.
-        let _ = err;
-        assert_eq!(std::fs::read(&target).unwrap(), b"original");
-    }
+    // Crash-during-write coverage is intentionally not unit-tested.
+    // The atomic property comes from the OS rename + fsync semantics;
+    // exercising it requires killing the process mid-write, which
+    // belongs in an out-of-process harness, not here.
 }
