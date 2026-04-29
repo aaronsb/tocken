@@ -464,12 +464,21 @@ function initCodePanel(root) {
   });
 
   // Backend emits "window:shown" when the user clicks the tray icon
-  // to bring the popup up. Reset to AWAITING_TOUCH each time. We do
-  // NOT auto-fire on DOMContentLoaded because the window is hidden at
-  // launch (tauri.conf.json: visible=false) — the LED would blink
-  // with the user unable to see it, time out, then fire again on the
-  // first tray click. Window:shown is the only entry point.
+  // to bring the popup up.
   listen("window:shown", () => {
     enterAwaiting();
+  });
+
+  // Two startup paths land here:
+  //   - Cold launch: window is hidden (tauri.conf: visible=false).
+  //     Don't fire unlock — the user wouldn't see the LED. Wait for
+  //     window:shown.
+  //   - Post-wizard reload: window is already visible (the user just
+  //     finished setup and clicked Open). No window:shown fires
+  //     because there's no hide→show transition. Fire unlock now so
+  //     the LED blinks and the user can touch through.
+  const win = window.__TAURI__.window.getCurrentWindow();
+  win.isVisible().then((visible) => {
+    if (visible) enterAwaiting();
   });
 }
