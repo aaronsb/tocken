@@ -27,11 +27,15 @@ pub fn validate_form(form: &EnrollForm) -> Result<(), EnrollError> {
     }
 
     if !(6..=8).contains(&form.digits) {
-        return Err(EnrollError::InvalidDigits(form.digits));
+        return Err(EnrollError::InvalidDigits {
+            digits: form.digits,
+        });
     }
 
     if form.period == 0 || form.period > 86_400 {
-        return Err(EnrollError::InvalidPeriod(form.period));
+        return Err(EnrollError::InvalidPeriod {
+            period: form.period,
+        });
     }
 
     decode_secret(&form.secret)?;
@@ -123,12 +127,12 @@ mod tests {
         f.digits = 5;
         assert!(matches!(
             validate_form(&f),
-            Err(EnrollError::InvalidDigits(5))
+            Err(EnrollError::InvalidDigits { digits: 5 })
         ));
         f.digits = 9;
         assert!(matches!(
             validate_form(&f),
-            Err(EnrollError::InvalidDigits(9))
+            Err(EnrollError::InvalidDigits { digits: 9 })
         ));
     }
 
@@ -138,12 +142,12 @@ mod tests {
         f.period = 0;
         assert!(matches!(
             validate_form(&f),
-            Err(EnrollError::InvalidPeriod(0))
+            Err(EnrollError::InvalidPeriod { period: 0 })
         ));
         f.period = 100_000;
         assert!(matches!(
             validate_form(&f),
-            Err(EnrollError::InvalidPeriod(100_000))
+            Err(EnrollError::InvalidPeriod { period: 100_000 })
         ));
     }
 

@@ -21,20 +21,22 @@ pub enum EnrollError {
     WeakSecret { bits: u32 },
 
     /// `digits` outside RFC 4226's 6..=8 range.
-    #[error("digits must be 6, 7, or 8 (got {0})")]
-    InvalidDigits(u8),
+    #[error("digits must be 6, 7, or 8 (got {digits})")]
+    InvalidDigits { digits: u8 },
 
     /// `period` zero or impossibly large.
-    #[error("period must be between 1 and 86400 seconds (got {0})")]
-    InvalidPeriod(u32),
+    #[error("period must be between 1 and 86400 seconds (got {period})")]
+    InvalidPeriod { period: u32 },
 
     /// Account is empty or whitespace-only.
     #[error("account name is required")]
     MissingAccount,
 
     /// URI didn't parse as `otpauth://`.
-    #[error("could not parse otpauth URI: {0}")]
-    InvalidUri(String),
+    /// Struct variant (not tuple) so the internally-tagged
+    /// `#[serde(tag = "kind")]` representation works.
+    #[error("could not parse otpauth URI: {detail}")]
+    InvalidUri { detail: String },
 
     /// `otpauth-migration://` URI handed to a single-entry path.
     /// Tracked separately under #7.
@@ -45,4 +47,35 @@ pub enum EnrollError {
     /// schema-supported but enrollment surfaces don't accept it yet.
     #[error("HOTP enrollment is not yet supported")]
     HotpNotSupported,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Guards against serde's internally-tagged-enum constraint:
+    /// `#[serde(tag = "kind")]` can't combine with tuple variants
+    /// carrying primitive payloads. If any variant fails to serialize
+    /// here, the Tauri command surface that returns these errors will
+    /// fail at runtime rather than at compile time.
+    #[test]
+    fn every_variant_serializes() {
+        let cases = [
+            EnrollError::InvalidSecret,
+            EnrollError::WeakSecret { bits: 80 },
+            EnrollError::InvalidDigits { digits: 5 },
+            EnrollError::InvalidPeriod { period: 0 },
+            EnrollError::MissingAccount,
+            EnrollError::InvalidUri {
+                detail: "bad".into(),
+            },
+            EnrollError::MigrationUriNotSupported,
+            EnrollError::HotpNotSupported,
+        ];
+        for c in &cases {
+            let json =
+                serde_json::to_string(c).unwrap_or_else(|e| panic!("variant {c:?} failed: {e}"));
+            assert!(json.contains("\"kind\""), "missing tag: {json}");
+        }
+    }
 }

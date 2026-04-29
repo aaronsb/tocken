@@ -9,6 +9,7 @@
 //! since `EntryKind::Hotp` is schema-supported but enrollment doesn't
 //! cover HOTP yet.
 
+use percent_encoding::percent_decode_str;
 use secrecy::SecretString;
 use url::Url;
 
@@ -30,25 +31,29 @@ pub fn parse_otpauth_uri(input: &str) -> Result<EnrollForm, EnrollError> {
         return Err(EnrollError::MigrationUriNotSupported);
     }
 
-    let url =
-        Url::parse(trimmed).map_err(|e| EnrollError::InvalidUri(format!("not a URL: {e}")))?;
+    let url = Url::parse(trimmed).map_err(|e| EnrollError::InvalidUri {
+        detail: format!("not a URL: {e}"),
+    })?;
 
     if url.scheme() != "otpauth" {
-        return Err(EnrollError::InvalidUri(format!(
-            "expected otpauth scheme, got {}",
-            url.scheme()
-        )));
+        return Err(EnrollError::InvalidUri {
+            detail: format!("expected otpauth scheme, got {}", url.scheme()),
+        });
     }
 
     let kind = match url.host_str() {
         Some("totp") => EntryKind::Totp,
         Some("hotp") => return Err(EnrollError::HotpNotSupported),
         Some(other) => {
-            return Err(EnrollError::InvalidUri(format!(
-                "expected totp or hotp, got {other}"
-            )))
+            return Err(EnrollError::InvalidUri {
+                detail: format!("expected totp or hotp, got {other}"),
+            })
         }
-        None => return Err(EnrollError::InvalidUri("missing type".into())),
+        None => {
+            return Err(EnrollError::InvalidUri {
+                detail: "missing type".into(),
+            })
+        }
     };
 
     let label = parse_label(&url)?;
@@ -64,14 +69,14 @@ pub fn parse_otpauth_uri(input: &str) -> Result<EnrollForm, EnrollError> {
             "secret" => secret = Some(value.into_owned()),
             "issuer" => issuer_param = Some(value.into_owned()),
             "digits" => {
-                digits = value
-                    .parse()
-                    .map_err(|_| EnrollError::InvalidUri(format!("digits not a number: {value}")))?
+                digits = value.parse().map_err(|_| EnrollError::InvalidUri {
+                    detail: format!("digits not a number: {value}"),
+                })?
             }
             "period" => {
-                period = value
-                    .parse()
-                    .map_err(|_| EnrollError::InvalidUri(format!("period not a number: {value}")))?
+                period = value.parse().map_err(|_| EnrollError::InvalidUri {
+                    detail: format!("period not a number: {value}"),
+                })?
             }
             "algorithm" => {
                 algorithm = parse_algorithm(&value)?;
@@ -80,8 +85,9 @@ pub fn parse_otpauth_uri(input: &str) -> Result<EnrollForm, EnrollError> {
         }
     }
 
-    let secret =
-        secret.ok_or_else(|| EnrollError::InvalidUri("missing secret parameter".into()))?;
+    let secret = secret.ok_or_else(|| EnrollError::InvalidUri {
+        detail: "missing secret parameter".into(),
+    })?;
 
     // Issuer precedence: `issuer=` query param wins over the label's
     // "Issuer:" prefix. RFC ambiguity (Google's QR docs prefer the
@@ -108,9 +114,15 @@ struct Label {
 fn parse_label(url: &Url) -> Result<Label, EnrollError> {
     let path = url.path().trim_start_matches('/');
     if path.is_empty() {
-        return Err(EnrollError::InvalidUri("missing label".into()));
+        return Err(EnrollError::InvalidUri {
+            detail: "missing label".into(),
+        });
     }
-    let decoded = percent_decode(path);
+    // `url::Url::path()` returns the percent-encoded path; decode here
+    // so non-ASCII issuers (Cyrillic, CJK) survive the round-trip.
+    // Lossy on invalid UTF-8 — enrollment shouldn't fail on a quirky
+    // label encoding when the secret itself is recoverable.
+    let decoded = percent_decode_str(path).decode_utf8_lossy();
     if let Some((issuer, account)) = decoded.split_once(':') {
         Ok(Label {
             issuer: issuer.trim().to_string(),
@@ -124,24 +136,14 @@ fn parse_label(url: &Url) -> Result<Label, EnrollError> {
     }
 }
 
-fn percent_decode(s: &str) -> String {
-    // The `url` crate exposes `percent_encoding` via re-export; we
-    // could pull that in directly, but the URI path is already mostly
-    // decoded by `url::Url::path`. The colon escape (`%3A`) is the
-    // common case worth handling explicitly.
-    s.replace("%3A", ":")
-        .replace("%40", "@")
-        .replace("%20", " ")
-}
-
 fn parse_algorithm(value: &str) -> Result<Algorithm, EnrollError> {
     match value.to_ascii_uppercase().as_str() {
         "SHA1" => Ok(Algorithm::Sha1),
         "SHA256" => Ok(Algorithm::Sha256),
         "SHA512" => Ok(Algorithm::Sha512),
-        other => Err(EnrollError::InvalidUri(format!(
-            "unknown algorithm: {other}"
-        ))),
+        other => Err(EnrollError::InvalidUri {
+            detail: format!("unknown algorithm: {other}"),
+        }),
     }
 }
 
@@ -194,6 +196,15 @@ mod tests {
     }
 
     #[test]
+    fn non_ascii_label_decodes() {
+        // Cyrillic "Привет" UTF-8-then-percent-encoded.
+        let uri = "otpauth://totp/%D0%9F%D1%80%D0%B8%D0%B2%D0%B5%D1%82:bob?secret=JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP";
+        let form = parse_otpauth_uri(uri).unwrap();
+        assert_eq!(form.issuer, "Привет");
+        assert_eq!(form.account, "bob");
+    }
+
+    #[test]
     fn migration_uri_returns_distinct_error() {
         let uri = "otpauth-migration://offline?data=ABCDEFG";
         assert!(matches!(
@@ -217,7 +228,7 @@ mod tests {
         let uri = "otpauth://totp/alice@example.com?issuer=Example";
         assert!(matches!(
             parse_otpauth_uri(uri),
-            Err(EnrollError::InvalidUri(_))
+            Err(EnrollError::InvalidUri { .. })
         ));
     }
 
@@ -236,7 +247,7 @@ mod tests {
         let uri = "https://example.com/totp/?secret=ABCD";
         assert!(matches!(
             parse_otpauth_uri(uri),
-            Err(EnrollError::InvalidUri(_))
+            Err(EnrollError::InvalidUri { .. })
         ));
     }
 }

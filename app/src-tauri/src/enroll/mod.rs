@@ -67,9 +67,13 @@ pub fn finalize_entry(form: EnrollForm) -> Entry {
 fn now_rfc3339() -> String {
     use time::format_description::well_known::Rfc3339;
     use time::OffsetDateTime;
+    // `OffsetDateTime::now_utc()` returns a value the `Rfc3339`
+    // formatter can always render. If this ever errors it indicates a
+    // logic bug, not a runtime condition we can recover from — fail
+    // loudly rather than write a Unix epoch into a real entry.
     OffsetDateTime::now_utc()
         .format(&Rfc3339)
-        .unwrap_or_else(|_| String::from("1970-01-01T00:00:00Z"))
+        .expect("RFC 3339 formatting of now_utc() is infallible")
 }
 
 #[cfg(test)]
