@@ -17,9 +17,37 @@ use session::unlock::{self, UnlockErrorIpc};
 use session::{EntryCode, Session};
 use store::{Store, StoreError, StorePaths};
 
-/// Tauri-managed global session. None when the user hasn't unlocked
-/// yet (or has dismissed / re-locked); Some after a successful unlock.
-type SessionState = Mutex<Option<Session>>;
+/// Tauri-managed global session.
+///
+/// `session` is None when the user hasn't unlocked (or has dismissed /
+/// re-locked); Some after a successful unlock.
+///
+/// `generation` is a monotonic counter bumped every time the session is
+/// dropped externally (`activate_window`, `hide_window`, `lock`,
+/// `quit_app`). The `unlock` command captures the generation at start
+/// and refuses to install the decrypted Session if the counter has
+/// advanced since. Without this, a long-running unlock IPC could race
+/// `activate_window`'s "fresh activation" gesture: the user clicks the
+/// tray during the 15s touch wait, `activate_window` clears the state,
+/// but the in-flight `unlock` still writes `Some(session)` afterward,
+/// silently undoing the user's intent.
+struct SessionInner {
+    session: Option<Session>,
+    generation: u64,
+}
+
+impl SessionInner {
+    fn new() -> Self {
+        Self { session: None, generation: 0 }
+    }
+
+    fn invalidate(&mut self) {
+        self.session = None;
+        self.generation = self.generation.wrapping_add(1);
+    }
+}
+
+type SessionState = Mutex<SessionInner>;
 
 #[derive(Serialize)]
 struct EntrySummary {
@@ -71,6 +99,13 @@ fn unlock(state: State<'_, SessionState>) -> Result<UnlockResult, UnlockErrorIpc
         }
     })?;
 
+    // Capture the generation BEFORE the long decrypt. If the session
+    // was invalidated mid-flight (e.g., user clicked tray to
+    // re-activate during the touch wait), the counter advances and
+    // we'll drop the just-decrypted Session at commit time rather
+    // than silently undoing the user's intent.
+    let gen_at_start = state.lock().unwrap().generation;
+
     let store_file = unlock::decrypt_store_with_yubikey(&paths).map_err(|e| {
         eprintln!("unlock failed: {e:#}");
         UnlockErrorIpc::from(&e)
@@ -88,7 +123,15 @@ fn unlock(state: State<'_, SessionState>) -> Result<UnlockResult, UnlockErrorIpc
         .collect();
 
     let session = Session::new(store_file.entries, now_unix());
-    *state.lock().unwrap() = Some(session);
+    let mut inner = state.lock().unwrap();
+    if inner.generation != gen_at_start {
+        // Stale unlock — user re-activated during the touch wait.
+        // Drop `session` (Entry's SecretString fields zeroize) and
+        // surface as a touch timeout so the frontend re-prompts.
+        eprintln!("unlock: stale (generation advanced); discarding decrypted session");
+        return Err(UnlockErrorIpc::TouchTimeout);
+    }
+    inner.session = Some(session);
 
     Ok(UnlockResult { entries: summaries })
 }
@@ -99,16 +142,16 @@ fn get_codes(state: State<'_, SessionState>) -> Result<CodesResponse, String> {
     let now = now_unix();
 
     let should_relock = guard
+        .session
         .as_ref()
         .map(|s| s.should_relock(now))
         .unwrap_or(true);
     if should_relock {
-        // Drop the session — Entry's SecretString fields zeroize.
-        *guard = None;
+        guard.invalidate();
         return Ok(CodesResponse::Locked);
     }
 
-    let session = guard.as_ref().unwrap();
+    let session = guard.session.as_ref().unwrap();
     let codes = session.codes(now).map_err(|e| {
         eprintln!("get_codes failed: {e:#}");
         "could not generate codes".to_string()
@@ -118,13 +161,13 @@ fn get_codes(state: State<'_, SessionState>) -> Result<CodesResponse, String> {
 
 #[tauri::command]
 fn lock(state: State<'_, SessionState>) -> Result<(), String> {
-    *state.lock().unwrap() = None;
+    state.lock().unwrap().invalidate();
     Ok(())
 }
 
 #[tauri::command]
 fn hide_window(app: tauri::AppHandle, state: State<'_, SessionState>) -> Result<(), String> {
-    *state.lock().unwrap() = None;
+    state.lock().unwrap().invalidate();
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.hide();
     }
@@ -135,7 +178,7 @@ fn hide_window(app: tauri::AppHandle, state: State<'_, SessionState>) -> Result<
 fn quit_app(app: tauri::AppHandle, state: State<'_, SessionState>) {
     // Drop the session before exit so seeds don't sit in RAM during
     // shutdown teardown.
-    *state.lock().unwrap() = None;
+    state.lock().unwrap().invalidate();
     app.exit(0);
 }
 
@@ -266,7 +309,7 @@ fn activate_window(app: &tauri::AppHandle) {
     use tauri::Emitter;
     if let Some(window) = app.get_webview_window("main") {
         if let Some(state) = app.try_state::<SessionState>() {
-            *state.lock().unwrap() = None;
+            state.lock().unwrap().invalidate();
         }
         let _ = anchor_top_right(&window);
         let _ = window.show();
@@ -291,7 +334,7 @@ fn anchor_top_right(window: &tauri::WebviewWindow) -> tauri::Result<()> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .manage::<SessionState>(Mutex::new(None))
+        .manage::<SessionState>(Mutex::new(SessionInner::new()))
         .invoke_handler(tauri::generate_handler![
             decrypt_store,
             is_initialized,

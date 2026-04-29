@@ -307,6 +307,12 @@ function initCodePanel(root) {
   let refreshTimer = null;
   let toastTimer = null;
   let currentState = null;
+  // Guards re-entry of enterAwaiting from the three call sites
+  // (window:shown, retry buttons, startup get_codes-Locked path).
+  // Without it, a rapid re-activation could double-fire unlock and
+  // produce stacked LED-blink windows. Backend's generation counter
+  // is the deeper safety net; this is the cheap UX guard.
+  let unlockInFlight = false;
 
   const showPane = (key) => {
     Object.entries(panes).forEach(([k, el]) =>
@@ -412,37 +418,43 @@ function initCodePanel(root) {
   };
 
   const enterAwaiting = async () => {
-    if (refreshTimer) {
-      clearTimeout(refreshTimer);
-      refreshTimer = null;
-    }
-    revealed = false;
-    revealBtn.classList.add("hidden");
-    subtitle.textContent = "locked";
-    showPane("awaiting");
-
-    // Order: dialog state first, then YubiKey input. Without this, the
-    // unlock invoke can fire before the browser has painted the
-    // awaiting pane, so the LED starts blinking with no visible UI
-    // confirmation of what's about to happen. Two rAFs guarantee the
-    // pane has committed; an additional ~150ms gives the user a beat
-    // to register the pulsing "Waiting for YubiKey touch..." banner
-    // before the LED comes alive.
-    await new Promise((r) =>
-      requestAnimationFrame(() => requestAnimationFrame(r))
-    );
-    await new Promise((r) => setTimeout(r, 150));
-
-    // Per spike #23: age-plugin-yubikey doesn't emit a touch-prompt
-    // callback; the LED is the user signal.
-    let result;
+    if (unlockInFlight) return;
+    unlockInFlight = true;
     try {
-      result = await invoke("unlock");
-    } catch (err) {
-      handleUnlockError(err);
-      return;
+      if (refreshTimer) {
+        clearTimeout(refreshTimer);
+        refreshTimer = null;
+      }
+      revealed = false;
+      revealBtn.classList.add("hidden");
+      subtitle.textContent = "locked";
+      showPane("awaiting");
+
+      // Order: dialog state first, then YubiKey input. Without this,
+      // the unlock invoke can fire before the browser has painted the
+      // awaiting pane, so the LED starts blinking with no visible UI
+      // confirmation of what's about to happen. Two rAFs guarantee
+      // the pane has committed; an additional ~150ms gives the user
+      // a beat to register the pulsing "Waiting for YubiKey touch..."
+      // banner before the LED comes alive.
+      await new Promise((r) =>
+        requestAnimationFrame(() => requestAnimationFrame(r))
+      );
+      await new Promise((r) => setTimeout(r, 150));
+
+      // Per spike #23: age-plugin-yubikey doesn't emit a touch-prompt
+      // callback; the LED is the user signal.
+      let result;
+      try {
+        result = await invoke("unlock");
+      } catch (err) {
+        handleUnlockError(err);
+        return;
+      }
+      enterUnlocked(result.entries);
+    } finally {
+      unlockInFlight = false;
     }
-    enterUnlocked(result.entries);
   };
 
   const handleUnlockError = (err) => {
@@ -524,7 +536,12 @@ function initCodePanel(root) {
   });
 
   // Backend emits "window:shown" when the user clicks the tray icon
-  // to bring the popup up.
+  // to bring the popup up. initCodePanel runs once per page load
+  // (re-init only happens via window.location.reload, which discards
+  // the entire JS context), so the unlistener returned by listen()
+  // is held to the page's lifetime by design — no leak risk under
+  // current invariants. If we ever introduce a re-init path, capture
+  // the unlistener and call it before re-binding.
   listen("window:shown", () => {
     enterAwaiting();
   });

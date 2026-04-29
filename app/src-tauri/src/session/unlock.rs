@@ -118,21 +118,86 @@ fn read_identity_stub() -> Result<String, UnlockError> {
         .ok_or(UnlockError::NoIdentity)
 }
 
+/// Substrings that identify an age::DecryptError as a missing-plugin
+/// failure (binary not on PATH, plugin protocol can't initialize).
+const PLUGIN_MISSING_HINTS: &[&str] = &["plugin", "missing"];
+
+/// Substrings that identify a hardware-path decrypt failure where the
+/// right UX is "retouch or re-run wizard" — covers genuine touch
+/// timeouts, slot/identity mismatches, and the recipient-stanza
+/// unwrap failures the plugin returns when no key works.
+const TOUCH_OR_MISMATCH_HINTS: &[&str] = &[
+    "no matching",
+    "could not unwrap",
+    "failed to decrypt",
+    "stanza",
+];
+
 fn classify_decrypt_error(err: &age::DecryptError) -> UnlockError {
-    let msg = format!("{err}").to_lowercase();
-    if msg.contains("plugin") && msg.contains("missing") {
+    classify_decrypt_message(&format!("{err}"))
+}
+
+/// Pure string-matching half of `classify_decrypt_error`, factored out
+/// so the heuristic is unit-testable without having to construct
+/// `age::DecryptError` variants (most of which aren't `pub`).
+fn classify_decrypt_message(msg: &str) -> UnlockError {
+    let lower = msg.to_lowercase();
+    if PLUGIN_MISSING_HINTS.iter().all(|h| lower.contains(h)) {
         UnlockError::PluginMissing
-    } else if msg.contains("no matching")
-        || msg.contains("could not unwrap")
-        || msg.contains("failed to decrypt")
-        || msg.contains("stanza")
-    {
-        // Hardware-path failure modes that all surface as the same UX:
-        // "touch not registered, or this YubiKey doesn't match the one
-        // that encrypted the store." User retries (or runs the wizard
-        // again if the slot was reprovisioned).
+    } else if TOUCH_OR_MISMATCH_HINTS.iter().any(|h| lower.contains(h)) {
         UnlockError::TouchTimeoutOrMismatch
     } else {
-        UnlockError::Other(format!("decrypt: {err}"))
+        UnlockError::Other(format!("decrypt: {msg}"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Regression guard: if `age` ever changes its `Display` wording,
+    /// these tests catch the silent UX break before users do. New
+    /// patterns get added here when we observe them in the wild
+    /// (the "stanza" / "Failed to decrypt YubiKey stanza" mapping
+    /// was added after smoke-test feedback in #3).
+    #[test]
+    fn plugin_missing_message_classifies_correctly() {
+        let cases = [
+            "plugin 'age-plugin-yubikey' missing",
+            "Plugin Missing",
+            "the age-plugin-yubikey plugin is missing from PATH",
+        ];
+        for case in cases {
+            assert!(
+                matches!(classify_decrypt_message(case), UnlockError::PluginMissing),
+                "expected PluginMissing for: {case:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn touch_timeout_or_mismatch_messages_classify_correctly() {
+        let cases = [
+            "no matching identity",
+            "could not unwrap file key",
+            "(stanza 0 0) Failed to decrypt YubiKey stanza", // observed during smoke
+            "Failed to decrypt: bad payload",
+            "got bad stanza body",
+        ];
+        for case in cases {
+            assert!(
+                matches!(
+                    classify_decrypt_message(case),
+                    UnlockError::TouchTimeoutOrMismatch
+                ),
+                "expected TouchTimeoutOrMismatch for: {case:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn unrecognized_messages_fall_through_to_other() {
+        let result = classify_decrypt_message("some weird future error");
+        assert!(matches!(result, UnlockError::Other(_)));
     }
 }

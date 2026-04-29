@@ -68,6 +68,13 @@ impl Session {
     /// Minimum rotation count across all TOTP entries. Re-lock fires
     /// once this exceeds `LOCK_AFTER_ROTATIONS`. HOTP entries don't
     /// rotate on a timer and are excluded.
+    ///
+    /// **Empty-session policy:** with zero TOTP entries we return 0,
+    /// so empty sessions never auto-relock on time alone. ADR-100's
+    /// threat model: an empty session has no exfiltratable secrets,
+    /// so indefinite hold is safe. This branch becomes effectively
+    /// dead code once #6 (enrollment) lands and every session has
+    /// at least one entry — flag for cleanup at that point.
     pub fn min_rotations(&self, now_unix: u64) -> u32 {
         let counts: Vec<u32> = self
             .entries
@@ -77,8 +84,6 @@ impl Session {
             .map(|(i, _)| self.rotations_for_entry(i, now_unix))
             .collect();
         if counts.is_empty() {
-            // No TOTP entries — nothing to rotate-count. Don't relock
-            // on time alone; the user explicitly opens / dismisses.
             return 0;
         }
         *counts.iter().min().unwrap()
