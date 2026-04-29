@@ -250,7 +250,7 @@ function initWizard(root) {
         await invoke("unlock");
         heading.textContent = "Setup complete";
         status.textContent =
-          "Your store is ready. No accounts yet — enrollment lands in #6.";
+          "Your store is ready. No accounts will exist on a new store yet — enrollment lands in #6.";
         finish.disabled = false;
       } catch (err) {
         heading.textContent = "Verification failed";
