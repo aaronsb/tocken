@@ -40,6 +40,22 @@ fn is_initialized() -> Result<bool, String> {
 }
 
 #[tauri::command]
+fn detect_yubikey() -> Result<wizard::yubikey::DetectResult, String> {
+    wizard::yubikey::detect().map_err(|e| {
+        eprintln!("detect_yubikey failed: {e:#}");
+        format!("could not detect YubiKey: {e}")
+    })
+}
+
+#[tauri::command]
+fn provision_yubikey(app: tauri::AppHandle) -> Result<wizard::yubikey::ProvisionResult, String> {
+    wizard::yubikey::provision(&app).map_err(|e| {
+        eprintln!("provision_yubikey failed: {e:#}");
+        format!("YubiKey provisioning failed: {e}")
+    })
+}
+
+#[tauri::command]
 fn generate_passphrase() -> String {
     // TODO(#13): the SecretString is dropped at end of scope, but the
     // returned String crosses IPC and lives in the JS heap until the
@@ -217,7 +233,9 @@ pub fn run() {
             verify_touch,
             decrypt_store,
             is_initialized,
-            generate_passphrase
+            generate_passphrase,
+            detect_yubikey,
+            provision_yubikey
         ])
         .setup(|app| {
             let show_item = MenuItemBuilder::with_id("show", "Show / hide").build(app)?;
