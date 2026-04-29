@@ -1,3 +1,4 @@
+mod session;
 mod store;
 mod wizard;
 

@@ -11,9 +11,31 @@
     <main id="main-panel" class="panel hidden">
       <header>
         <h1>tocken</h1>
-        <span class="subtitle" id="main-subtitle">unlocked</span>
+        <span class="subtitle" id="main-subtitle">locked</span>
+        <button id="reveal-toggle" class="reveal hidden" type="button" aria-label="reveal codes">
+          <span aria-hidden="true">eye</span>
+        </button>
       </header>
-      <p id="status" class="status">Code panel arrives in #3.</p>
+
+      <section id="code-state" class="code-state">
+        <div class="code-pane" data-state="awaiting-touch">
+          <p class="status pending">Touch your YubiKey to unlock.</p>
+        </div>
+        <div class="code-pane hidden" data-state="unlocked">
+          <ul id="code-list" class="code-list"></ul>
+        </div>
+        <div class="code-pane hidden" data-state="touch-timeout">
+          <p class="status err">No touch detected. Press the YubiKey within ~15 seconds of clicking unlock.</p>
+          <button id="retry-unlock" class="touch" type="button">Retry</button>
+        </div>
+        <div class="code-pane hidden" data-state="error">
+          <p id="code-error" class="status err"></p>
+        </div>
+      </section>
+
+      <footer class="code-footer">
+        <button id="dismiss" type="button">Dismiss</button>
+      </footer>
     </main>
 
     <section id="wizard" class="panel wizard hidden" aria-label="first-run setup">
@@ -66,6 +88,8 @@
         <button id="wizard-finish" class="touch" type="button">Open</button>
       </div>
     </section>
+
+    <div id="code-toast" role="status" aria-live="polite"></div>
 
     <div id="ctx-menu" class="ctx-menu" role="menu">
       <button id="ctx-copy" type="button">Copy</button>
