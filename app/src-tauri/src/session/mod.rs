@@ -5,3 +5,6 @@
 //! since unlock) crosses LOCK_AFTER_ROTATIONS).
 
 pub mod totp;
+
+#[cfg(test)]
+mod spike;
