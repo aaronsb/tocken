@@ -12,7 +12,10 @@ pub struct Entry {
     pub id: String,
     pub issuer: String,
     pub account: String,
-    #[serde(serialize_with = "serialize_secret", deserialize_with = "deserialize_secret")]
+    #[serde(
+        serialize_with = "serialize_secret",
+        deserialize_with = "deserialize_secret"
+    )]
     pub secret: SecretString,
     pub digits: u8,
     pub period: u32,
@@ -126,10 +129,7 @@ mod tests {
         let parsed = deserialize(&text).unwrap();
         assert_eq!(parsed.entries.len(), 1);
         assert_eq!(parsed.entries[0].issuer, "Google");
-        assert_eq!(
-            parsed.entries[0].secret.expose_secret(),
-            "JBSWY3DPEHPK3PXP"
-        );
+        assert_eq!(parsed.entries[0].secret.expose_secret(), "JBSWY3DPEHPK3PXP");
     }
 
     #[test]

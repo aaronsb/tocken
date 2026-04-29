@@ -19,7 +19,9 @@ use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 
-use age::plugin::{Identity as PluginIdentity, IdentityPluginV1, Recipient as PluginRecipient, RecipientPluginV1};
+use age::plugin::{
+    Identity as PluginIdentity, IdentityPluginV1, Recipient as PluginRecipient, RecipientPluginV1,
+};
 use age::secrecy::SecretString;
 use age::{Callbacks, Decryptor, Encryptor};
 
@@ -65,10 +67,12 @@ impl Callbacks for ProbeCallbacks {
 fn identity_plugin_decrypt_round_trip_with_callbacks() {
     let identity_text = run_capture("age-plugin-yubikey", &["--identity"]);
     let recipient_str = parse_recipient(&identity_text).expect("Recipient: line");
-    let identity_str = parse_identity_stub(&identity_text).expect("AGE-PLUGIN-YUBIKEY identity stub");
+    let identity_str =
+        parse_identity_stub(&identity_text).expect("AGE-PLUGIN-YUBIKEY identity stub");
 
     // Encrypt to the YubiKey recipient via plugin protocol.
-    let plugin_recipient = PluginRecipient::from_str(&recipient_str).expect("parse plugin recipient");
+    let plugin_recipient =
+        PluginRecipient::from_str(&recipient_str).expect("parse plugin recipient");
     let recipient_plugin_name = plugin_recipient.plugin().to_owned();
     let recipient_plugin = RecipientPluginV1::new(
         &recipient_plugin_name,
@@ -80,30 +84,32 @@ fn identity_plugin_decrypt_round_trip_with_callbacks() {
 
     let plaintext = b"tocken decrypt-callbacks spike";
     let mut ciphertext = Vec::new();
-    let encryptor = Encryptor::with_recipients(std::iter::once(&recipient_plugin as &dyn age::Recipient))
-        .expect("Encryptor::with_recipients");
+    let encryptor =
+        Encryptor::with_recipients(std::iter::once(&recipient_plugin as &dyn age::Recipient))
+            .expect("Encryptor::with_recipients");
     let mut writer = encryptor.wrap_output(&mut ciphertext).unwrap();
     writer.write_all(plaintext).unwrap();
     writer.finish().unwrap();
 
     // Decrypt via IdentityPluginV1 with our probe callbacks.
-    let plugin_identity = PluginIdentity::from_str(&identity_str).expect("parse plugin identity stub");
+    let plugin_identity =
+        PluginIdentity::from_str(&identity_str).expect("parse plugin identity stub");
     let identity_plugin_name = plugin_identity.plugin().to_owned();
     let probe = ProbeCallbacks::new();
-    let identity_plugin = IdentityPluginV1::new(
-        &identity_plugin_name,
-        &[plugin_identity],
-        probe.clone(),
-    )
-    .expect("IdentityPluginV1::new");
+    let identity_plugin =
+        IdentityPluginV1::new(&identity_plugin_name, &[plugin_identity], probe.clone())
+            .expect("IdentityPluginV1::new");
 
-    let decryptor = Decryptor::new_buffered(ciphertext.as_slice()).expect("Decryptor::new_buffered");
+    let decryptor =
+        Decryptor::new_buffered(ciphertext.as_slice()).expect("Decryptor::new_buffered");
     let mut reader = decryptor
         .decrypt(std::iter::once(&identity_plugin as &dyn age::Identity))
         .expect("decrypt");
     let mut recovered = Vec::new();
     use std::io::Read;
-    reader.read_to_end(&mut recovered).expect("read decrypted plaintext");
+    reader
+        .read_to_end(&mut recovered)
+        .expect("read decrypted plaintext");
 
     assert_eq!(recovered, plaintext, "plaintext mismatch");
     eprintln!(

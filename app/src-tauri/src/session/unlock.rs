@@ -12,7 +12,7 @@ use age::plugin::{Identity as PluginIdentity, IdentityPluginV1};
 use age::{Decryptor, NoCallbacks};
 use serde::Serialize;
 
-use crate::store::{format, paths::StorePaths, format::StoreFile};
+use crate::store::{format, format::StoreFile, paths::StorePaths};
 
 const PLUGIN_BINARY: &str = "age-plugin-yubikey";
 
@@ -53,9 +53,9 @@ impl From<&UnlockError> for UnlockErrorIpc {
             UnlockError::NoIdentity => Self::NoIdentity,
             UnlockError::TouchTimeoutOrMismatch => Self::TouchTimeout,
             UnlockError::StoreCorrupted => Self::StoreCorrupted,
-            UnlockError::StoreUnreadable(detail) | UnlockError::Other(detail) => {
-                Self::Other { detail: detail.clone() }
-            }
+            UnlockError::StoreUnreadable(detail) | UnlockError::Other(detail) => Self::Other {
+                detail: detail.clone(),
+            },
         }
     }
 }
@@ -78,8 +78,8 @@ pub fn decrypt_store_with_yubikey(paths: &StorePaths) -> Result<StoreFile, Unloc
         }
     })?;
 
-    let ciphertext = std::fs::read(&paths.store)
-        .map_err(|e| UnlockError::StoreUnreadable(e.to_string()))?;
+    let ciphertext =
+        std::fs::read(&paths.store).map_err(|e| UnlockError::StoreUnreadable(e.to_string()))?;
 
     let decryptor = Decryptor::new_buffered(ciphertext.as_slice())
         .map_err(|e| UnlockError::Other(format!("decryptor init: {e}")))?;

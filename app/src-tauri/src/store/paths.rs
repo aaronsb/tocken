@@ -60,10 +60,7 @@ mod tests {
 
     #[test]
     fn from_dirs_lays_out_files_under_provided_roots() {
-        let paths = StorePaths::from_dirs(
-            PathBuf::from("/tmp/data"),
-            PathBuf::from("/tmp/config"),
-        );
+        let paths = StorePaths::from_dirs(PathBuf::from("/tmp/data"), PathBuf::from("/tmp/config"));
         assert_eq!(paths.master, PathBuf::from("/tmp/data/master.age"));
         assert_eq!(paths.store, PathBuf::from("/tmp/data/store.age"));
         assert_eq!(paths.recipients, PathBuf::from("/tmp/data/recipients.txt"));

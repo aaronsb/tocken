@@ -1,3 +1,8 @@
+// TODO(#6): consumers (Tauri commands + frontend wiring) land in
+// follow-on commits on this branch. Allow dead-code while the layer
+// is being built up.
+#[allow(dead_code)]
+mod enroll;
 mod session;
 mod store;
 mod wizard;
@@ -38,7 +43,10 @@ struct SessionInner {
 
 impl SessionInner {
     fn new() -> Self {
-        Self { session: None, generation: 0 }
+        Self {
+            session: None,
+            generation: 0,
+        }
     }
 
     fn invalidate(&mut self) {
@@ -190,10 +198,7 @@ struct FinalizeResult {
 }
 
 #[tauri::command]
-fn finalize_init(
-    passphrase: String,
-    yubikey_recipient: String,
-) -> Result<FinalizeResult, String> {
+fn finalize_init(passphrase: String, yubikey_recipient: String) -> Result<FinalizeResult, String> {
     // TODO(#13): passphrase arrives as String over IPC; same residue
     // concern as decrypt_store. Move into SecretString here and drop
     // the String at end of scope.
@@ -317,7 +322,6 @@ fn activate_window(app: &tauri::AppHandle) {
         let _ = app.emit("window:shown", ());
     }
 }
-
 
 fn anchor_top_right(window: &tauri::WebviewWindow) -> tauri::Result<()> {
     if let Some(monitor) = window.current_monitor()? {

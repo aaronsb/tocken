@@ -101,8 +101,8 @@ pub fn detect() -> Result<DetectResult, PluginError> {
 
     let text = String::from_utf8_lossy(&output.stdout);
     let recipient = parse_field(&text, "Recipient:");
-    let serial = parse_field(&text, "Serial:")
-        .map(|s| s.split(',').next().unwrap_or("").trim().to_string());
+    let serial =
+        parse_field(&text, "Serial:").map(|s| s.split(',').next().unwrap_or("").trim().to_string());
 
     Ok(DetectResult {
         configured: recipient.is_some(),
@@ -309,13 +309,8 @@ mod tests {
         let plugin_recipient = PluginRecipient::from_str(&recipient_str)
             .expect("recipient string should parse as a plugin recipient");
         let plugin_name = plugin_recipient.plugin().to_owned();
-        let plugin = RecipientPluginV1::new(
-            &plugin_name,
-            &[plugin_recipient],
-            &[],
-            NoCallbacks,
-        )
-        .expect("RecipientPluginV1::new (is age-plugin-{name} on PATH?)");
+        let plugin = RecipientPluginV1::new(&plugin_name, &[plugin_recipient], &[], NoCallbacks)
+            .expect("RecipientPluginV1::new (is age-plugin-{name} on PATH?)");
 
         let plaintext = b"tocken plugin spike";
         let mut ciphertext = Vec::new();
@@ -337,7 +332,12 @@ mod tests {
             .stderr(Stdio::piped())
             .spawn()
             .expect("spawn age (is the age binary on PATH?)");
-        child.stdin.as_mut().unwrap().write_all(&ciphertext).unwrap();
+        child
+            .stdin
+            .as_mut()
+            .unwrap()
+            .write_all(&ciphertext)
+            .unwrap();
         let output = child.wait_with_output().unwrap();
         assert!(
             output.status.success(),
