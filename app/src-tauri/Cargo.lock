@@ -4425,9 +4425,11 @@ dependencies = [
  "tauri-build",
  "tempfile",
  "thiserror 2.0.18",
+ "time",
  "toml 0.8.2",
  "totp-rs",
  "ulid",
+ "url",
  "zeroize",
 ]
 

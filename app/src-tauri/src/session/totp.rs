@@ -40,8 +40,7 @@ pub fn generate(
     // here would just break display for legitimately-stored weak entries.
     // skew=0: no clock-skew tolerance window; we want the exact
     // current-step code for display.
-    let totp =
-        TOTP::new_unchecked(alg, digits as usize, 0, period as u64, bytes);
+    let totp = TOTP::new_unchecked(alg, digits as usize, 0, period as u64, bytes);
     Ok(totp.generate(time_unix))
 }
 
@@ -72,8 +71,7 @@ mod tests {
             (20000000000, "65353130"),
         ];
         for (t, expected) in cases {
-            let got =
-                generate(RFC6238_SECRET_SHA1_B32, 8, 30, Algorithm::Sha1, t).unwrap();
+            let got = generate(RFC6238_SECRET_SHA1_B32, 8, 30, Algorithm::Sha1, t).unwrap();
             assert_eq!(got, expected, "RFC 6238 SHA1 t={t}");
         }
     }

@@ -66,10 +66,7 @@ mod tests {
 
         for y in 0..width {
             for x in 0..width {
-                let dark = matches!(
-                    modules[(y * width + x) as usize],
-                    qrcode::Color::Dark
-                );
+                let dark = matches!(modules[(y * width + x) as usize], qrcode::Color::Dark);
                 if !dark {
                     continue;
                 }
@@ -102,8 +99,7 @@ mod tests {
     fn round_trip_short_secret_otpauth_uri() {
         // Sub-128-bit demo secret. Decoder doesn't validate length —
         // ADR-101 places that check at enrollment time, after decode.
-        let payload =
-            "otpauth://totp/Demo:bob@example.com?secret=JBSWY3DPEHPK3PXP&issuer=Demo";
+        let payload = "otpauth://totp/Demo:bob@example.com?secret=JBSWY3DPEHPK3PXP&issuer=Demo";
         let png = encode_to_png(payload, 6);
         let decoded = decode_image_bytes(&png).expect("decode");
         assert_eq!(decoded, vec![payload.to_string()]);
