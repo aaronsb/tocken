@@ -35,13 +35,18 @@ pub enum StoreError {
     Paths(#[from] paths::PathError),
 }
 
+/// Boxed recipient suitable for storing in `Store::extra_recipients`.
+/// Lets callers mix `x25519::Recipient` and plugin recipients (e.g.
+/// `age::plugin::RecipientPluginV1` for YubiKey) under one type.
+pub type BoxedRecipient = Box<dyn Recipient + Send + Sync>;
+
 /// In-memory unlocked view of the seed store, plus enough state to
 /// re-encrypt back to disk.
 pub struct Store {
     paths: StorePaths,
     file: StoreFile,
     master: x25519::Identity,
-    extra_recipients: Vec<x25519::Recipient>,
+    extra_recipients: Vec<BoxedRecipient>,
 }
 
 impl Store {
@@ -51,7 +56,7 @@ impl Store {
     pub fn create(
         paths: StorePaths,
         passphrase: SecretString,
-        extra_recipients: Vec<x25519::Recipient>,
+        extra_recipients: Vec<BoxedRecipient>,
     ) -> Result<Self, StoreError> {
         paths.ensure_dirs()?;
         let master = x25519::Identity::generate();
@@ -139,7 +144,7 @@ impl Store {
         let mut refs: Vec<&dyn Recipient> = Vec::with_capacity(1 + self.extra_recipients.len());
         refs.push(&master_pub as &dyn Recipient);
         for r in &self.extra_recipients {
-            refs.push(r as &dyn Recipient);
+            refs.push(r.as_ref() as &dyn Recipient);
         }
         let ciphertext = crypto::encrypt_to_recipients(text.as_bytes(), &refs)?;
         atomic::write(&self.paths.store, &ciphertext)?;
@@ -213,7 +218,7 @@ mod tests {
         let _ = Store::create(
             paths.clone(),
             passphrase,
-            vec![backup.to_public()],
+            vec![Box::new(backup.to_public())],
         )
         .unwrap();
 

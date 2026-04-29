@@ -1,7 +1,5 @@
 mod store;
-
-use std::io::Write;
-use std::process::{Command, Stdio};
+mod wizard;
 
 use age::secrecy::SecretString;
 use serde::Serialize;
@@ -13,16 +11,6 @@ use tauri::{
 
 use store::{Store, StoreError, StorePaths};
 
-const SMOKE_TEST_PLAINTEXT: &[u8] = b"tocken: hardware-key flow OK";
-
-#[derive(Serialize)]
-struct TouchResult {
-    ok: bool,
-    message: String,
-    serial: Option<String>,
-    recipient: Option<String>,
-}
-
 #[derive(Serialize)]
 struct DecryptStoreResult {
     ok: bool,
@@ -30,6 +18,87 @@ struct DecryptStoreResult {
     store_path: String,
     master_path: String,
     created: bool,
+}
+
+#[tauri::command]
+fn is_initialized() -> Result<bool, String> {
+    let paths = StorePaths::resolve().map_err(|e| e.to_string())?;
+    Ok(paths.master.exists() && paths.store.exists())
+}
+
+#[derive(Serialize)]
+struct FinalizeResult {
+    store_path: String,
+    master_path: String,
+    config_path: String,
+}
+
+#[tauri::command]
+fn finalize_init(
+    passphrase: String,
+    yubikey_recipient: String,
+) -> Result<FinalizeResult, String> {
+    // TODO(#13): passphrase arrives as String over IPC; same residue
+    // concern as decrypt_store. Move into SecretString here and drop
+    // the String at end of scope.
+    let paths = StorePaths::resolve().map_err(|e| {
+        eprintln!("finalize_init: paths failed: {e:#}");
+        format!("could not resolve storage paths: {e}")
+    })?;
+
+    let recipient = wizard::yubikey::recipient_from_string(&yubikey_recipient).map_err(|e| {
+        eprintln!("finalize_init: recipient parse failed: {e:#}");
+        "YubiKey recipient is not a valid plugin recipient".to_string()
+    })?;
+
+    let secret = SecretString::from(passphrase);
+    Store::create(paths.clone(), secret, vec![recipient]).map_err(|e| {
+        eprintln!("finalize_init: Store::create failed: {e:#}");
+        user_facing(&e)
+    })?;
+
+    let config = wizard::config::Config {
+        yubikey_recipient: Some(yubikey_recipient),
+    };
+    config.save(&paths.config).map_err(|e| {
+        eprintln!("finalize_init: config save failed: {e:#}");
+        format!("could not write config: {e}")
+    })?;
+
+    Ok(FinalizeResult {
+        store_path: paths.store.display().to_string(),
+        master_path: paths.master.display().to_string(),
+        config_path: paths.config.display().to_string(),
+    })
+}
+
+#[tauri::command]
+fn detect_yubikey() -> Result<wizard::yubikey::DetectResult, String> {
+    wizard::yubikey::detect().map_err(|e| {
+        eprintln!("detect_yubikey failed: {e:#}");
+        format!("could not detect YubiKey: {e}")
+    })
+}
+
+#[tauri::command]
+fn provision_yubikey(app: tauri::AppHandle) -> Result<wizard::yubikey::ProvisionResult, String> {
+    wizard::yubikey::provision(&app).map_err(|e| {
+        eprintln!("provision_yubikey failed: {e:#}");
+        format!("YubiKey provisioning failed: {e}")
+    })
+}
+
+#[tauri::command]
+fn generate_passphrase() -> String {
+    // TODO(#13): the SecretString is dropped at end of scope, but the
+    // returned String crosses IPC and lives in the JS heap until the
+    // user navigates past the passphrase pane. Wizard UX intentionally
+    // disables click-to-copy to reduce clipboard exfiltration; the
+    // heap residue itself is #13's concern.
+    use age::secrecy::ExposeSecret;
+    wizard::passphrase::generate(wizard::passphrase::DEFAULT_WORDS)
+        .expose_secret()
+        .to_string()
 }
 
 #[tauri::command]
@@ -74,98 +143,6 @@ fn user_facing(err: &StoreError) -> String {
     .into()
 }
 
-#[tauri::command]
-fn verify_touch() -> Result<TouchResult, String> {
-    let identity = capture("age-plugin-yubikey", &["--identity"])
-        .map_err(|e| format!("age-plugin-yubikey failed: {e}. Is the YubiKey plugged in?"))?;
-
-    let recipient = parse_field(&identity, "Recipient:")
-        .ok_or_else(|| "could not parse recipient from age-plugin-yubikey output".to_string())?;
-    let serial = parse_field(&identity, "Serial:")
-        .map(|s| s.split(',').next().unwrap_or("").trim().to_string());
-
-    let identity_file = tempfile::NamedTempFile::new()
-        .map_err(|e| format!("tempfile: {e}"))?;
-    std::fs::write(identity_file.path(), &identity)
-        .map_err(|e| format!("write identity: {e}"))?;
-
-    let ciphertext = pipe(
-        "age",
-        &["-r", &recipient],
-        SMOKE_TEST_PLAINTEXT,
-    )?;
-
-    let plaintext = pipe(
-        "age",
-        &["-d", "-i", identity_file.path().to_str().unwrap()],
-        &ciphertext,
-    )
-    .map_err(|e| format!("decrypt failed (no touch within timeout?): {e}"))?;
-
-    if plaintext != SMOKE_TEST_PLAINTEXT {
-        return Err(format!(
-            "decrypted plaintext mismatch: got {:?}",
-            String::from_utf8_lossy(&plaintext)
-        ));
-    }
-
-    Ok(TouchResult {
-        ok: true,
-        message: "Touch verified — age round-trip succeeded.".into(),
-        serial,
-        recipient: Some(recipient),
-    })
-}
-
-fn capture(cmd: &str, args: &[&str]) -> Result<String, String> {
-    let output = Command::new(cmd)
-        .args(args)
-        .output()
-        .map_err(|e| format!("spawn {cmd}: {e}"))?;
-    if !output.status.success() {
-        return Err(format!(
-            "{cmd} exited with status {}: {}",
-            output.status,
-            String::from_utf8_lossy(&output.stderr)
-        ));
-    }
-    Ok(String::from_utf8_lossy(&output.stdout).to_string())
-}
-
-fn pipe(cmd: &str, args: &[&str], input: &[u8]) -> Result<Vec<u8>, String> {
-    let mut child = Command::new(cmd)
-        .args(args)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("spawn {cmd}: {e}"))?;
-    child
-        .stdin
-        .as_mut()
-        .unwrap()
-        .write_all(input)
-        .map_err(|e| format!("write to {cmd} stdin: {e}"))?;
-    let output = child
-        .wait_with_output()
-        .map_err(|e| format!("{cmd} wait: {e}"))?;
-    if !output.status.success() {
-        return Err(format!(
-            "{cmd} exited with status {}: {}",
-            output.status,
-            String::from_utf8_lossy(&output.stderr)
-        ));
-    }
-    Ok(output.stdout)
-}
-
-fn parse_field(text: &str, key: &str) -> Option<String> {
-    text.lines().find_map(|line| {
-        let trimmed = line.trim_start_matches('#').trim();
-        trimmed.strip_prefix(key).map(|v| v.trim().to_string())
-    })
-}
-
 fn toggle_window(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         if window.is_visible().unwrap_or(false) {
@@ -193,7 +170,14 @@ fn anchor_top_right(window: &tauri::WebviewWindow) -> tauri::Result<()> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![verify_touch, decrypt_store])
+        .invoke_handler(tauri::generate_handler![
+            decrypt_store,
+            is_initialized,
+            generate_passphrase,
+            detect_yubikey,
+            provision_yubikey,
+            finalize_init
+        ])
         .setup(|app| {
             let show_item = MenuItemBuilder::with_id("show", "Show / hide").build(app)?;
             let quit_item = MenuItemBuilder::with_id("quit", "Quit").build(app)?;

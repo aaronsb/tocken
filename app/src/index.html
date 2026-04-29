@@ -8,18 +8,65 @@
     <script type="module" src="/main.js" defer></script>
   </head>
   <body>
-    <main class="panel">
+    <main id="main-panel" class="panel hidden">
       <header>
         <h1>tocken</h1>
-        <span class="subtitle">tray scaffold</span>
+        <span class="subtitle" id="main-subtitle">unlocked</span>
       </header>
-      <button id="touch-btn" class="touch">Touch your YubiKey</button>
-      <p id="status" class="status">Click the button, then touch the key.</p>
-      <details>
-        <summary>details</summary>
-        <pre id="details-body"></pre>
-      </details>
+      <p id="status" class="status">Code panel arrives in #3.</p>
     </main>
+
+    <section id="wizard" class="panel wizard hidden" aria-label="first-run setup">
+      <header>
+        <h1>tocken setup</h1>
+        <span class="subtitle" id="wizard-step-label">welcome</span>
+      </header>
+
+      <div class="wizard-pane" data-step="welcome">
+        <h2>Welcome</h2>
+        <p>tocken stores TOTP seeds in an encrypted file you can copy across machines. A YubiKey unlocks it day-to-day; a passphrase you write down once is the recovery path.</p>
+        <button class="touch" data-next>Begin</button>
+      </div>
+
+      <div class="wizard-pane hidden" data-step="passphrase">
+        <h2>Recovery passphrase</h2>
+        <p class="warn">Write this down. Do not store it digitally. Anyone with the passphrase can decrypt your blob.</p>
+        <pre id="wizard-passphrase">— task #11 will fill this in —</pre>
+        <div class="row">
+          <button id="wizard-regen" type="button">Regenerate</button>
+          <button class="touch" data-next>I've written it down</button>
+        </div>
+      </div>
+
+      <div class="wizard-pane hidden" data-step="confirm">
+        <h2>Confirm</h2>
+        <p>Type <code>I have written it down</code> to continue.</p>
+        <input id="wizard-confirm-input" type="text" autocomplete="off" />
+        <button class="touch" data-next disabled>Continue</button>
+      </div>
+
+      <div class="wizard-pane hidden" data-step="yubikey">
+        <h2>YubiKey</h2>
+        <p id="wizard-yk-status">Detecting…</p>
+        <button id="wizard-yk-provision" type="button" class="touch hidden">Provision</button>
+        <pre id="wizard-yk-output" class="hidden"></pre>
+        <button class="touch hidden" data-next>Continue</button>
+      </div>
+
+      <div class="wizard-pane hidden" data-step="location">
+        <h2>Storage location</h2>
+        <p>Files will be created at:</p>
+        <pre id="wizard-location"></pre>
+        <button class="touch" data-next>Create store</button>
+      </div>
+
+      <div class="wizard-pane hidden" data-step="done">
+        <h2>Done</h2>
+        <p>tocken is ready.</p>
+        <button id="wizard-finish" class="touch" type="button">Open</button>
+      </div>
+    </section>
+
     <div id="ctx-menu" class="ctx-menu" role="menu">
       <button id="ctx-copy" type="button">Copy</button>
       <button id="ctx-select-all" type="button">Select all</button>

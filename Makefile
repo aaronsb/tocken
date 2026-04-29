@@ -30,6 +30,10 @@ release: ## cargo build --release
 test: ## cargo test --lib
 	cd $(TAURI_DIR) && cargo test --lib
 
+.PHONY: test-hw
+test-hw: ## run #[ignore]'d tests that require a YubiKey
+	cd $(TAURI_DIR) && cargo test --lib -- --ignored
+
 .PHONY: fmt
 fmt: ## cargo fmt
 	cd $(TAURI_DIR) && cargo fmt
