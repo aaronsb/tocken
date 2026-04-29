@@ -14,6 +14,10 @@
 
 pub mod error;
 pub mod parse;
+// TODO(#6): consumed by file-picker (#6 file source) and camera (#6
+// camera source) — both land in follow-on commits. Allow dead-code
+// while the consumers are pending.
+#[allow(dead_code)]
 pub mod qr;
 pub mod validate;
 
@@ -22,6 +26,8 @@ use serde::Deserialize;
 use ulid::Ulid;
 
 use crate::store::format::{Algorithm, Entry, EntryKind};
+
+pub use error::EnrollError;
 
 /// User-supplied (or URI-derived) enrollment input. The pre-store DTO:
 /// no ULID, no created_at, no commitment that the secret has been
@@ -64,6 +70,32 @@ pub fn finalize_entry(form: EnrollForm) -> Entry {
     }
 }
 
+/// Real-world manual entry pastes secrets like `jbsw y3dp ehpk 3pxp`
+/// or `JBSWY3DPEHPK3PXP===`. `totp_rs::Secret::Encoded::to_bytes`
+/// rejects lowercase, whitespace, and `=` padding. Normalize at the
+/// command boundary so validation sees a canonical form. Idempotent.
+pub fn normalize_secret(input: &str) -> String {
+    input
+        .chars()
+        .filter(|c| !c.is_whitespace() && *c != '=')
+        .map(|c| c.to_ascii_uppercase())
+        .collect()
+}
+
+/// Run the validate + weak-check pipeline against an `EnrollForm`. The
+/// `force_weak` flag suppresses `EnrollError::WeakSecret` once the
+/// frontend has surfaced ADR-101's confirmation. Returns Ok when the
+/// caller can safely call `finalize_entry(form)` and commit the entry.
+pub fn vet_form(form: &EnrollForm, force_weak: bool) -> Result<(), EnrollError> {
+    validate::validate_form(form)?;
+    if !force_weak {
+        if let Some(bits) = validate::check_weak_secret(&form.secret) {
+            return Err(EnrollError::WeakSecret { bits });
+        }
+    }
+    Ok(())
+}
+
 fn now_rfc3339() -> String {
     use time::format_description::well_known::Rfc3339;
     use time::OffsetDateTime;
@@ -101,5 +133,71 @@ mod tests {
             entry.secret.expose_secret(),
             "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP"
         );
+    }
+
+    #[test]
+    fn normalize_secret_handles_whitespace_lowercase_padding() {
+        assert_eq!(normalize_secret("jbsw y3dp ehpk 3pxp"), "JBSWY3DPEHPK3PXP");
+        assert_eq!(normalize_secret("JBSWY3DPEHPK3PXP===="), "JBSWY3DPEHPK3PXP");
+        assert_eq!(
+            normalize_secret(" jbswy3dp\nehpk3pxp\t==="),
+            "JBSWY3DPEHPK3PXP"
+        );
+    }
+
+    #[test]
+    fn normalize_secret_idempotent_on_canonical() {
+        let canonical = "JBSWY3DPEHPK3PXP";
+        assert_eq!(normalize_secret(canonical), canonical);
+        assert_eq!(normalize_secret(&normalize_secret(canonical)), canonical);
+    }
+
+    #[test]
+    fn vet_form_returns_weak_when_force_false() {
+        let form = EnrollForm {
+            issuer: "Demo".into(),
+            account: "bob".into(),
+            secret: SecretString::from("JBSWY3DPEHPK3PXP"),
+            digits: 6,
+            period: 30,
+            algorithm: Algorithm::Sha1,
+            kind: EntryKind::Totp,
+        };
+        assert!(matches!(
+            vet_form(&form, false),
+            Err(EnrollError::WeakSecret { bits: 80 })
+        ));
+    }
+
+    #[test]
+    fn vet_form_passes_when_force_true() {
+        let form = EnrollForm {
+            issuer: "Demo".into(),
+            account: "bob".into(),
+            secret: SecretString::from("JBSWY3DPEHPK3PXP"),
+            digits: 6,
+            period: 30,
+            algorithm: Algorithm::Sha1,
+            kind: EntryKind::Totp,
+        };
+        assert!(vet_form(&form, true).is_ok());
+    }
+
+    #[test]
+    fn vet_form_rejects_invalid_irrespective_of_force() {
+        // force_weak does not bypass other validation.
+        let form = EnrollForm {
+            issuer: "Demo".into(),
+            account: "".into(),
+            secret: SecretString::from("JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP"),
+            digits: 6,
+            period: 30,
+            algorithm: Algorithm::Sha1,
+            kind: EntryKind::Totp,
+        };
+        assert!(matches!(
+            vet_form(&form, true),
+            Err(EnrollError::MissingAccount)
+        ));
     }
 }

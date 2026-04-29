@@ -1,7 +1,3 @@
-// TODO(#6): consumers (Tauri commands + frontend wiring) land in
-// follow-on commits on this branch. Allow dead-code while the layer
-// is being built up.
-#[allow(dead_code)]
 mod enroll;
 mod session;
 mod store;
@@ -179,6 +175,77 @@ fn get_codes(state: State<'_, SessionState>) -> Result<CodesResponse, String> {
         "could not generate codes".to_string()
     })?;
     Ok(CodesResponse::Codes { codes })
+}
+
+#[derive(Serialize)]
+struct EnrollSuccess {
+    /// ULID of the newly-added entry. Frontend can highlight or scroll
+    /// to it after the panel re-renders.
+    id: String,
+    /// Total entry count after insert. Convenience for the frontend so
+    /// it can decide whether to refresh the codes list immediately
+    /// (locked sessions stay locked; unlocked just re-renders).
+    total_entries: usize,
+}
+
+#[tauri::command]
+fn enroll_manual(
+    state: State<'_, SessionState>,
+    form: enroll::EnrollForm,
+    force_weak: bool,
+) -> Result<EnrollSuccess, enroll::EnrollError> {
+    enroll_with_form(state, form, force_weak)
+}
+
+#[tauri::command]
+fn enroll_uri(
+    state: State<'_, SessionState>,
+    uri: String,
+    force_weak: bool,
+) -> Result<EnrollSuccess, enroll::EnrollError> {
+    let form = enroll::parse::parse_otpauth_uri(&uri)?;
+    enroll_with_form(state, form, force_weak)
+}
+
+/// Shared commit path for every enrollment source. Normalize the
+/// secret, run the validate + weak-secret pipeline, then mutate the
+/// retained Store and rebuild the Session view from the updated
+/// entries. Per ADR-100 §6 / #27, re-encrypt on the YubiKey-unlock
+/// path does NOT require a touch; the recipient set was reconstructed
+/// from `recipients.txt` at unlock time and lives in the Store.
+fn enroll_with_form(
+    state: State<'_, SessionState>,
+    mut form: enroll::EnrollForm,
+    force_weak: bool,
+) -> Result<EnrollSuccess, enroll::EnrollError> {
+    use age::secrecy::ExposeSecret;
+
+    let normalized = enroll::normalize_secret(form.secret.expose_secret());
+    form.secret = SecretString::from(normalized);
+
+    enroll::vet_form(&form, force_weak)?;
+
+    let entry = enroll::finalize_entry(form);
+    let entry_id = entry.id.clone();
+
+    let mut guard = state.lock().unwrap();
+    let unlocked = guard.state.as_mut().ok_or(enroll::EnrollError::Locked)?;
+    unlocked.store.add_entry(entry);
+    unlocked.store.save().map_err(|e| {
+        eprintln!("enroll: save failed: {e:#}");
+        enroll::EnrollError::SaveFailed {
+            detail: e.to_string(),
+        }
+    })?;
+
+    let unlocked_at = unlocked.session.unlocked_at_unix();
+    unlocked.session = Session::new(unlocked.store.entries().to_vec(), unlocked_at);
+    let total = unlocked.store.entries().len();
+
+    Ok(EnrollSuccess {
+        id: entry_id,
+        total_entries: total,
+    })
 }
 
 #[tauri::command]
@@ -369,6 +436,8 @@ pub fn run() {
             finalize_init,
             unlock,
             get_codes,
+            enroll_manual,
+            enroll_uri,
             lock,
             hide_window,
             quit_app

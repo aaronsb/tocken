@@ -23,7 +23,11 @@
         </div>
         <div class="code-pane hidden" data-state="unlocked">
           <ul id="code-list" class="code-list"></ul>
-          <p id="code-empty" class="status hidden">No accounts in this store yet. Enrollment lands in #6.</p>
+          <div id="code-empty" class="empty-state hidden">
+            <p class="status">No accounts in this store yet.</p>
+            <button id="empty-add-account" class="touch" type="button">Add account</button>
+          </div>
+          <button id="add-account" class="add-account hidden" type="button" aria-label="add account">+ Add</button>
         </div>
         <div class="code-pane hidden" data-state="touch-timeout">
           <p class="status err">No touch detected. Press the YubiKey within ~15 seconds of clicking unlock.</p>
@@ -89,6 +93,65 @@
         <h2 id="wizard-done-heading">Verify setup</h2>
         <p id="wizard-done-status">Touch your YubiKey to open your new store for the first time.</p>
         <button id="wizard-finish" class="touch" type="button" disabled>Open</button>
+      </div>
+    </section>
+
+    <section id="enroll" class="panel enroll hidden" aria-label="add account">
+      <header>
+        <h1>Add account</h1>
+        <span class="subtitle" id="enroll-step-label">choose source</span>
+      </header>
+
+      <div class="enroll-pane" data-step="source-picker">
+        <p>Where is the account secret coming from?</p>
+        <div class="enroll-sources">
+          <button class="touch" data-source="paste" type="button">Paste otpauth:// URI</button>
+          <button class="touch" data-source="manual" type="button">Type it manually</button>
+        </div>
+        <button id="enroll-cancel" type="button">Cancel</button>
+      </div>
+
+      <div class="enroll-pane hidden" data-step="paste">
+        <p>Paste an <code>otpauth://totp/...</code> URI. Most authenticator apps will export entries in this shape.</p>
+        <textarea id="enroll-uri-input" rows="3" autocomplete="off" spellcheck="false" placeholder="otpauth://totp/Issuer:account?secret=...&amp;issuer=Issuer"></textarea>
+        <p id="enroll-uri-error" class="status err hidden"></p>
+        <p id="enroll-uri-weak" class="status warn hidden"></p>
+        <div class="row">
+          <button class="touch" data-back type="button">Back</button>
+          <button id="enroll-uri-submit" class="touch" type="button">Add</button>
+        </div>
+      </div>
+
+      <div class="enroll-pane hidden" data-step="manual">
+        <p>Enter the values from the service's 2FA setup page.</p>
+        <form id="enroll-manual-form" autocomplete="off">
+          <label>Issuer<input name="issuer" type="text" placeholder="e.g. GitHub" /></label>
+          <label>Account<input name="account" type="text" placeholder="alice@example.com" required /></label>
+          <label>Secret (base32)<input name="secret" type="text" required spellcheck="false" /></label>
+          <div class="row">
+            <label>Digits
+              <select name="digits">
+                <option value="6" selected>6</option>
+                <option value="7">7</option>
+                <option value="8">8</option>
+              </select>
+            </label>
+            <label>Period (s)<input name="period" type="number" value="30" min="1" max="3600" /></label>
+            <label>Algorithm
+              <select name="algorithm">
+                <option value="SHA1" selected>SHA1</option>
+                <option value="SHA256">SHA256</option>
+                <option value="SHA512">SHA512</option>
+              </select>
+            </label>
+          </div>
+          <p id="enroll-manual-error" class="status err hidden"></p>
+          <p id="enroll-manual-weak" class="status warn hidden"></p>
+          <div class="row">
+            <button class="touch" data-back type="button">Back</button>
+            <button id="enroll-manual-submit" class="touch" type="submit">Add</button>
+          </div>
+        </form>
       </div>
     </section>
 
