@@ -20,31 +20,10 @@ window.addEventListener("DOMContentLoaded", async () => {
     mainPanel.classList.remove("hidden");
   }
 
-  const btn = document.querySelector("#touch-btn");
   const status = document.querySelector("#status");
-  const details = document.querySelector("#details-body");
   const ctxMenu = document.querySelector("#ctx-menu");
   const ctxCopy = document.querySelector("#ctx-copy");
   const ctxSelectAll = document.querySelector("#ctx-select-all");
-
-  btn.addEventListener("click", async () => {
-    btn.disabled = true;
-    status.textContent = "Touch your YubiKey now…";
-    status.className = "status pending";
-    details.textContent = "";
-    try {
-      const result = await invoke("verify_touch");
-      status.textContent = result.message;
-      status.className = "status ok";
-      details.textContent = JSON.stringify(result, null, 2);
-    } catch (err) {
-      status.textContent = String(err);
-      status.className = "status err";
-      details.textContent = String(err);
-    } finally {
-      btn.disabled = false;
-    }
-  });
 
   const hideCtx = () => ctxMenu.classList.remove("visible");
 
@@ -68,7 +47,7 @@ window.addEventListener("DOMContentLoaded", async () => {
 
   ctxCopy.addEventListener("click", async () => {
     const sel = window.getSelection().toString();
-    const text = sel || details.textContent || status.textContent;
+    const text = sel || status.textContent;
     if (text) {
       try {
         await navigator.clipboard.writeText(text);
@@ -86,7 +65,7 @@ window.addEventListener("DOMContentLoaded", async () => {
 
   ctxSelectAll.addEventListener("click", () => {
     const range = document.createRange();
-    range.selectNodeContents(details);
+    range.selectNodeContents(status);
     const sel = window.getSelection();
     sel.removeAllRanges();
     sel.addRange(range);
