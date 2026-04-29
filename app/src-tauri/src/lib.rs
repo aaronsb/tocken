@@ -1,3 +1,4 @@
+mod enroll;
 mod session;
 mod store;
 mod wizard;

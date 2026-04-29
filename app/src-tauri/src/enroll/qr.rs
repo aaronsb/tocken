@@ -1,0 +1,130 @@
+//! QR decode surface for enrollment. Wraps `rqrr` so the rest of
+//! `enroll/` only sees `Vec<String>` (one decoded payload per QR).
+//!
+//! Image bytes come in three shapes during enrollment: a PNG/JPG read
+//! from a file picker (#6 file source), a clipboard image (#6
+//! clipboard source), and a frame captured from the webcam (#6 camera
+//! source). All three normalize to "decode bytes containing an image"
+//! before reaching this module.
+
+use image::ImageReader;
+use std::io::Cursor;
+
+#[derive(Debug, thiserror::Error)]
+pub enum QrError {
+    #[error("could not decode image: {0}")]
+    Image(#[from] image::ImageError),
+    #[error("no QR codes found in image")]
+    NoCodesFound,
+    #[error("rqrr decode failed: {0}")]
+    Decode(String),
+}
+
+/// Decode every QR code present in `image_bytes`. Returns the textual
+/// payloads in the order `rqrr` finds them (typically top-left to
+/// bottom-right). A successful decode returns at least one payload;
+/// `Err(NoCodesFound)` means the image was readable but contained no
+/// recognizable QR.
+pub fn decode_image_bytes(image_bytes: &[u8]) -> Result<Vec<String>, QrError> {
+    let img = ImageReader::new(Cursor::new(image_bytes))
+        .with_guessed_format()
+        .map_err(image::ImageError::IoError)?
+        .decode()?;
+    let luma = img.into_luma8();
+
+    let mut prep = rqrr::PreparedImage::prepare(luma);
+    let grids = prep.detect_grids();
+    if grids.is_empty() {
+        return Err(QrError::NoCodesFound);
+    }
+
+    let mut payloads = Vec::with_capacity(grids.len());
+    for grid in grids {
+        let (_meta, content) = grid.decode().map_err(|e| QrError::Decode(e.to_string()))?;
+        payloads.push(content);
+    }
+    Ok(payloads)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use image::{GrayImage, Luma};
+    use qrcode::QrCode;
+
+    /// Render `payload` as a QR code and return PNG bytes. Uses the
+    /// `qrcode` crate's matrix output and writes pixels manually so we
+    /// don't pull in `qrcode`'s `image` integration (which would need
+    /// matching feature flags between this dep and our prod `image`).
+    fn encode_to_png(payload: &str, scale: u32) -> Vec<u8> {
+        let code = QrCode::new(payload).expect("encode QR");
+        let modules = code.to_colors();
+        let width = code.width() as u32;
+        let quiet = 4u32; // standard 4-module quiet zone
+        let img_size = (width + 2 * quiet) * scale;
+        let mut img = GrayImage::from_pixel(img_size, img_size, Luma([255u8]));
+
+        for y in 0..width {
+            for x in 0..width {
+                let dark = matches!(
+                    modules[(y * width + x) as usize],
+                    qrcode::Color::Dark
+                );
+                if !dark {
+                    continue;
+                }
+                for dy in 0..scale {
+                    for dx in 0..scale {
+                        let px = (quiet + x) * scale + dx;
+                        let py = (quiet + y) * scale + dy;
+                        img.put_pixel(px, py, Luma([0u8]));
+                    }
+                }
+            }
+        }
+
+        let mut buf = Vec::new();
+        image::DynamicImage::ImageLuma8(img)
+            .write_to(&mut Cursor::new(&mut buf), image::ImageFormat::Png)
+            .expect("png encode");
+        buf
+    }
+
+    #[test]
+    fn round_trip_otpauth_uri() {
+        let payload = "otpauth://totp/Example:alice@example.com?secret=JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP&issuer=Example&digits=6&period=30&algorithm=SHA1";
+        let png = encode_to_png(payload, 6);
+        let decoded = decode_image_bytes(&png).expect("decode");
+        assert_eq!(decoded, vec![payload.to_string()]);
+    }
+
+    #[test]
+    fn round_trip_short_secret_otpauth_uri() {
+        // Sub-128-bit demo secret. Decoder doesn't validate length —
+        // ADR-101 places that check at enrollment time, after decode.
+        let payload =
+            "otpauth://totp/Demo:bob@example.com?secret=JBSWY3DPEHPK3PXP&issuer=Demo";
+        let png = encode_to_png(payload, 6);
+        let decoded = decode_image_bytes(&png).expect("decode");
+        assert_eq!(decoded, vec![payload.to_string()]);
+    }
+
+    #[test]
+    fn no_qr_in_blank_image_errors() {
+        let blank = GrayImage::from_pixel(200, 200, Luma([255u8]));
+        let mut buf = Vec::new();
+        image::DynamicImage::ImageLuma8(blank)
+            .write_to(&mut Cursor::new(&mut buf), image::ImageFormat::Png)
+            .unwrap();
+        assert!(matches!(
+            decode_image_bytes(&buf),
+            Err(QrError::NoCodesFound)
+        ));
+    }
+
+    #[test]
+    fn malformed_image_bytes_errors() {
+        let result = decode_image_bytes(b"not an image");
+        assert!(matches!(result, Err(QrError::Image(_))));
+    }
+}
