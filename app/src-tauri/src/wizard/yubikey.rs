@@ -6,9 +6,14 @@
 
 use std::io::{BufRead, BufReader};
 use std::process::{Command, Stdio};
+use std::str::FromStr;
 
+use age::plugin::{Recipient as PluginRecipient, RecipientPluginV1};
+use age::NoCallbacks;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
+
+use crate::store::BoxedRecipient;
 
 const PLUGIN_BINARY: &str = "age-plugin-yubikey";
 
@@ -30,6 +35,23 @@ pub struct ProvisionResult {
     pub pin_puk_message: Option<String>,
 }
 
+/// Wrap a YubiKey recipient string (output by `age-plugin-yubikey
+/// --identity` or `--generate`) as a `BoxedRecipient` suitable for
+/// `Store::create`. Encrypt-only — wizard never decrypts so the
+/// `NoCallbacks` callback layer is sufficient. Decrypt-side touch
+/// prompts are #3's territory.
+// TODO(#16): consumed by finalize_init to construct the initial
+// recipient set when the wizard hands off to Store::create.
+#[allow(dead_code)]
+pub fn recipient_from_string(s: &str) -> Result<BoxedRecipient, PluginError> {
+    let plugin_recipient =
+        PluginRecipient::from_str(s).map_err(|e| PluginError::InvalidRecipient(e.to_string()))?;
+    let plugin_name = plugin_recipient.plugin().to_owned();
+    let plugin = RecipientPluginV1::new(&plugin_name, &[plugin_recipient], &[], NoCallbacks)
+        .map_err(|e| PluginError::PluginUnavailable(e.to_string()))?;
+    Ok(Box::new(plugin))
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum PluginError {
     #[error("could not spawn {PLUGIN_BINARY}: {0}")]
@@ -38,6 +60,10 @@ pub enum PluginError {
     NonZero { status: i32, stderr: String },
     #[error("could not parse recipient from {PLUGIN_BINARY} output")]
     NoRecipient,
+    #[error("invalid recipient string: {0}")]
+    InvalidRecipient(String),
+    #[error("plugin binary unavailable: {0}")]
+    PluginUnavailable(String),
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
     #[error("emit: {0}")]
