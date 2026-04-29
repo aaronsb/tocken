@@ -27,9 +27,14 @@ These constraints rule out the obvious shortcuts: KDE Wallet / GNOME Keyring (no
 
 ## Decision
 
-### 1. Use `age` (multi-recipient envelope encryption)
+### 1. Use `age` (multi-recipient envelope encryption), via the native Rust crate
 
 The seed store is an [`age`](https://github.com/FiloSottile/age) file with multiple recipients. Each recipient is independently capable of decrypting the file. Standard format, written spec, audited primitives, broad ecosystem (`age` CLI, [`rage`](https://github.com/str4d/rage), `age` Rust crate).
+
+Implementation uses the [native Rust `age` crate](https://docs.rs/age) with plugin support, **not** subprocess invocations of the `age` binary. Rationale:
+
+- **Memory hygiene** (#13). When we shell out to `age`, plaintext seeds traverse a kernel pipe buffer between processes and exist in the `age` process's memory during decryption. We cannot apply `zeroize` / `mlock` discipline to either. The native crate keeps plaintext entirely within our process boundary, so we own the full data path.
+- **Subprocess to `age-plugin-yubikey` is unavoidable** — that's how the age plugin protocol works (plugins are external binaries communicating over stdio). But that subprocess only handles the YubiKey-side X25519 *unwrap* step; it never sees plaintext seed material. The interface is narrower than shelling out to `age` itself.
 
 This follows the pattern Filippo Valsorda described in [*My age+YubiKeys Password Management Solution*](https://words.filippo.io/passage/) (the reference implementation, `passage`).
 
@@ -85,12 +90,14 @@ The top-level `version` field reserves migration capacity. A v2 format that chan
 
 ### 4. XDG-compliant file paths
 
+Following the [XDG Base Directory Specification](https://specifications.freedesktop.org/basedir-spec/basedir-spec-latest.html): user data lives under `$XDG_DATA_HOME`, configuration under `$XDG_CONFIG_HOME`. The encrypted store and master identity are user data (not configuration), so they go to data:
+
 | Path | Contents |
 |---|---|
-| `$XDG_CONFIG_HOME/tocken/master.age` | Passphrase-encrypted master identity (default `~/.config/tocken/master.age`) |
-| `$XDG_CONFIG_HOME/tocken/store.age` | Encrypted seed store |
-| `$XDG_CONFIG_HOME/tocken/config.toml` | Plaintext UX/behavior config (#3, #8) |
-| `$XDG_CONFIG_HOME/tocken/recipients.txt` | Plaintext list of recipient strings used at last encryption (informational; redundant with `store.age` header but useful for audit) |
+| `$XDG_DATA_HOME/tocken/master.age` | Passphrase-encrypted master identity (default `~/.local/share/tocken/master.age`) |
+| `$XDG_DATA_HOME/tocken/store.age` | Encrypted seed store (default `~/.local/share/tocken/store.age`) |
+| `$XDG_DATA_HOME/tocken/recipients.txt` | Informational list of recipient strings used at last encryption (audit aid; redundant with `store.age` header) |
+| `$XDG_CONFIG_HOME/tocken/config.toml` | Plaintext UX/behavior config (#3, #8) (default `~/.config/tocken/config.toml`) |
 
 `$XDG_STATE_HOME/tocken/` is reserved for runtime state (currently empty; defaults to `~/.local/state/tocken/`).
 
@@ -178,7 +185,6 @@ These operations are surfaced in the UI per #10 (backup & recovery). Defaults:
 
 ### Neutral
 
-- The choice between using the [`age` Rust crate](https://docs.rs/age) natively versus shelling out to the `age` binary is **deferred to implementation**. The on-disk format is identical either way; only the in-process API differs. Lean toward native (consistent with the "no shell-out for runtime data paths" decision in #6/#7) but the `age` binary is acceptable for v0 if native plugin support is fiddly.
 - ULID vs UUIDv4 for entry IDs is a minor preference (chosen ULID for sortability); either works.
 
 ## Alternatives Considered
@@ -203,3 +209,9 @@ Strong contender. JSON is universal; every tool reads it. TOML chosen for human 
 
 ### Keep version history (`store.age.bak.1`, `.bak.2`, ...)
 Rejected. Backup history belongs to the OS / user's chosen backup tooling (BTRFS snapshots, `syncthing` history, Time Machine, etc.). Baking in our own history would duplicate work poorly, eat disk for the same gain, and fight with copy-on-write filesystems. Atomic writes prevent corruption; they're not a substitute for backups.
+
+### Shell out to the `age` binary instead of using the native crate
+Considered. Rejected because plaintext seeds would traverse a kernel pipe buffer between processes and reside in the `age` process's memory during decryption. Neither location is subject to our `zeroize` / `mlock` discipline (#13), so seeds would leave residue in memory we don't control. The native crate keeps plaintext entirely within our process boundary. The age plugin protocol still spawns `age-plugin-yubikey` as a subprocess, but that interface only carries wrapped keys for the X25519 unwrap step — never plaintext seed material — so the residue concern doesn't apply there.
+
+### Store data files under `$XDG_CONFIG_HOME`
+A naive reading of \"app stuff goes in `~/.config/`\" would put `master.age` and `store.age` alongside `config.toml`. Rejected per XDG spec — `$XDG_CONFIG_HOME` is for configuration; user data files belong in `$XDG_DATA_HOME`. The encrypted seed store and master identity are unambiguously user data.
