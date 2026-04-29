@@ -1,4 +1,5 @@
 const { invoke } = window.__TAURI__.core;
+const { listen } = window.__TAURI__.event;
 
 const WIZARD_STEPS = ["welcome", "passphrase", "confirm", "yubikey", "location", "done"];
 
@@ -10,21 +11,24 @@ window.addEventListener("DOMContentLoaded", async () => {
     const initialized = await invoke("is_initialized");
     if (initialized) {
       mainPanel.classList.remove("hidden");
+      initCodePanel(mainPanel);
     } else {
       wizard.classList.remove("hidden");
       initWizard(wizard);
     }
   } catch (err) {
-    // Fail open to main panel; wizard logic comes online in subsequent tasks.
     console.error("is_initialized failed:", err);
     mainPanel.classList.remove("hidden");
+    initCodePanel(mainPanel);
   }
 
-  const status = document.querySelector("#status");
+  // Custom right-click menu (native menus close the popup on focus).
+  // Copy uses the current selection; Select all targets the visible
+  // wizard pane or the code panel's status line — codes themselves
+  // are user-select: none.
   const ctxMenu = document.querySelector("#ctx-menu");
   const ctxCopy = document.querySelector("#ctx-copy");
   const ctxSelectAll = document.querySelector("#ctx-select-all");
-
   const hideCtx = () => ctxMenu.classList.remove("visible");
 
   document.addEventListener("contextmenu", (e) => {
@@ -46,12 +50,12 @@ window.addEventListener("DOMContentLoaded", async () => {
   });
 
   ctxCopy.addEventListener("click", async () => {
-    const sel = window.getSelection().toString();
-    const text = sel || status.textContent;
+    const text = window.getSelection().toString();
     if (text) {
       try {
         await navigator.clipboard.writeText(text);
       } catch {
+        // Fallback for environments without clipboard API.
         const ta = document.createElement("textarea");
         ta.value = text;
         document.body.appendChild(ta);
@@ -64,20 +68,25 @@ window.addEventListener("DOMContentLoaded", async () => {
   });
 
   ctxSelectAll.addEventListener("click", () => {
-    const range = document.createRange();
-    range.selectNodeContents(status);
-    const sel = window.getSelection();
-    sel.removeAllRanges();
-    sel.addRange(range);
+    const visiblePane =
+      document.querySelector(".wizard-pane:not(.hidden)") ||
+      document.querySelector(".code-pane:not(.hidden)");
+    if (visiblePane) {
+      const range = document.createRange();
+      range.selectNodeContents(visiblePane);
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
+    }
     hideCtx();
   });
 });
 
-// Wizard state machine. Each step has an `enter` handler that runs
-// when the pane shows. Steps may set state on `ctx` and gate the next
-// transition by leaving the [data-next] button disabled.
+// ─────────────────────────────────────────────────────────────────────
+// Wizard state machine (issue #5)
+// ─────────────────────────────────────────────────────────────────────
+
 function initWizard(root) {
-  const { listen } = window.__TAURI__.event;
   const stepLabel = root.querySelector("#wizard-step-label");
   const panes = Array.from(root.querySelectorAll(".wizard-pane"));
   const paneByStep = Object.fromEntries(panes.map((p) => [p.dataset.step, p]));
@@ -100,9 +109,6 @@ function initWizard(root) {
 
   const advance = () => index < panes.length - 1 && showStep(index + 1);
 
-  // Generic next-button delegation. Handlers can disable individual
-  // buttons to gate progress (e.g. confirm pane requires the typed
-  // phrase before its [data-next] becomes enabled).
   root.addEventListener("click", (e) => {
     const next = e.target.closest("[data-next]");
     if (!next || next.disabled) return;
@@ -169,7 +175,6 @@ function initWizard(root) {
         return;
       }
 
-      // Not provisioned — show the Provision pane.
       status.textContent =
         "No age identity on this YubiKey yet. Plug it in and click Provision. You'll be asked to touch the key.";
       provisionBtn.classList.remove("hidden");
@@ -178,15 +183,12 @@ function initWizard(root) {
       if (provisionBtn.dataset.bound) return;
       provisionBtn.dataset.bound = "1";
 
-      // Stream provisioning output as the subprocess emits it.
       const unlisten = await listen("wizard:provision-output", (event) => {
         output.textContent += `${event.payload}\n`;
         output.scrollTop = output.scrollHeight;
       });
 
       provisionBtn.addEventListener("click", async () => {
-        // Double-click guard: any concurrent age-plugin-yubikey
-        // --generate would race the PIV slot.
         provisionBtn.disabled = true;
         status.textContent = "Provisioning… touch your YubiKey when it blinks.";
         output.classList.remove("hidden");
@@ -197,22 +199,21 @@ function initWizard(root) {
           ctx.pinPukMessage = result.pin_puk_message ?? null;
           status.textContent = "YubiKey provisioned.";
           if (ctx.pinPukMessage) {
-            output.textContent += `\n${ctx.pinPukMessage}\n\n` +
+            output.textContent +=
+              `\n${ctx.pinPukMessage}\n\n` +
               "Save the PIN/PUK above offline — needed only for PIV admin operations.";
           }
           next.classList.remove("hidden");
           unlisten();
         } catch (err) {
           status.textContent = `Provisioning failed: ${err}`;
-          provisionBtn.disabled = false; // allow Retry
+          provisionBtn.disabled = false;
         }
       });
     },
 
     location: (pane) => {
       const display = pane.querySelector("#wizard-location");
-      // Could resolve via a Tauri command, but XDG defaults are stable
-      // and finalize_init returns the actual paths on the next pane.
       display.textContent =
         "$XDG_DATA_HOME/tocken/{master.age,store.age}\n" +
         "(typically ~/.local/share/tocken/)";
@@ -246,4 +247,216 @@ function initWizard(root) {
   };
 
   showStep(0);
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Code panel state machine (issue #3)
+// ─────────────────────────────────────────────────────────────────────
+
+function initCodePanel(root) {
+  const panes = {
+    awaiting: root.querySelector('[data-state="awaiting-touch"]'),
+    unlocked: root.querySelector('[data-state="unlocked"]'),
+    timeout: root.querySelector('[data-state="touch-timeout"]'),
+    error: root.querySelector('[data-state="error"]'),
+  };
+  const list = root.querySelector("#code-list");
+  const errBody = root.querySelector("#code-error");
+  const retry = root.querySelector("#retry-unlock");
+  const dismiss = root.querySelector("#dismiss");
+  const revealBtn = root.querySelector("#reveal-toggle");
+  const subtitle = root.querySelector("#main-subtitle");
+  const toast = document.querySelector("#code-toast");
+
+  let revealed = false;
+  let refreshTimer = null;
+  let toastTimer = null;
+  let currentState = null;
+
+  const showPane = (key) => {
+    Object.entries(panes).forEach(([k, el]) =>
+      el.classList.toggle("hidden", k !== key)
+    );
+    currentState = key;
+  };
+
+  const formatCode = (s) => {
+    if (s.length === 6) return `${s.slice(0, 3)} ${s.slice(3)}`;
+    if (s.length === 8) return `${s.slice(0, 4)} ${s.slice(4)}`;
+    return s;
+  };
+
+  const flashToast = (msg) => {
+    toast.textContent = msg;
+    toast.classList.add("visible");
+    if (toastTimer) clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => toast.classList.remove("visible"), 1500);
+  };
+
+  const copyCode = async (li, code) => {
+    try {
+      await navigator.clipboard.writeText(code);
+      li.classList.add("flash");
+      flashToast("Copied");
+      setTimeout(() => li.classList.remove("flash"), 400);
+    } catch (err) {
+      flashToast("Copy failed");
+      console.error("clipboard.writeText:", err);
+    }
+  };
+
+  const renderCodes = (codes) => {
+    list.innerHTML = "";
+    for (const c of codes) {
+      const li = document.createElement("li");
+      li.dataset.id = c.id;
+
+      const labelDiv = document.createElement("div");
+      labelDiv.className = "label";
+      const issuer = document.createElement("span");
+      issuer.className = "issuer";
+      issuer.textContent = c.issuer;
+      const account = document.createElement("span");
+      account.className = "account";
+      account.textContent = c.account;
+      labelDiv.append(issuer, account);
+
+      const digits = document.createElement("span");
+      digits.className = "digits";
+      digits.dataset.code = c.code;
+      digits.textContent = revealed ? formatCode(c.code) : "••• •••";
+
+      const countdown = document.createElement("div");
+      countdown.className = "countdown";
+      const fill = document.createElement("div");
+      fill.style.width = `${(c.time_remaining / c.period) * 100}%`;
+      countdown.appendChild(fill);
+
+      li.append(labelDiv, digits, countdown);
+      li.addEventListener("click", () => copyCode(li, c.code));
+      list.appendChild(li);
+    }
+  };
+
+  const refreshCodes = async () => {
+    let response;
+    try {
+      response = await invoke("get_codes");
+    } catch (err) {
+      errBody.textContent = String(err);
+      showPane("error");
+      return;
+    }
+
+    if (response.kind === "Locked") {
+      // Backend re-locked. Restart the unlock flow.
+      enterAwaiting();
+      return;
+    }
+
+    renderCodes(response.codes);
+
+    // Re-fetch just past the next rollover. Pick the shortest
+    // time_remaining among entries — that's when a code changes.
+    // 200ms buffer to land safely after the period boundary.
+    const minRemaining = Math.min(
+      ...response.codes.map((c) => c.time_remaining)
+    );
+    const ms = (minRemaining > 0 ? minRemaining : 1) * 1000 + 200;
+    if (refreshTimer) clearTimeout(refreshTimer);
+    refreshTimer = setTimeout(refreshCodes, ms);
+  };
+
+  const enterAwaiting = async () => {
+    if (refreshTimer) {
+      clearTimeout(refreshTimer);
+      refreshTimer = null;
+    }
+    revealed = false;
+    revealBtn.classList.add("hidden");
+    subtitle.textContent = "locked";
+    showPane("awaiting");
+
+    // Per spike #23: age-plugin-yubikey doesn't emit a touch-prompt
+    // callback; the LED is the user signal. We invoke unlock the
+    // moment AWAITING_TOUCH renders so the blink starts immediately.
+    let result;
+    try {
+      result = await invoke("unlock");
+    } catch (err) {
+      handleUnlockError(err);
+      return;
+    }
+    enterUnlocked(result.entries);
+  };
+
+  const handleUnlockError = (err) => {
+    if (err && err.kind === "TouchTimeout") {
+      showPane("timeout");
+      return;
+    }
+    if (err && err.kind === "PluginMissing") {
+      errBody.textContent =
+        "age-plugin-yubikey is not installed or not on PATH.";
+      showPane("error");
+      return;
+    }
+    if (err && err.kind === "NoIdentity") {
+      errBody.textContent =
+        "No YubiKey identity is configured. Re-run the first-run wizard.";
+      showPane("error");
+      return;
+    }
+    if (err && err.kind === "StoreCorrupted") {
+      errBody.textContent =
+        "The encrypted store is corrupted. Restore from a backup blob.";
+      showPane("error");
+      return;
+    }
+    const detail =
+      err && err.detail ? err.detail : err && err.kind ? err.kind : String(err);
+    errBody.textContent = detail;
+    showPane("error");
+  };
+
+  const enterUnlocked = async (_summaries) => {
+    subtitle.textContent = "unlocked";
+    revealBtn.classList.remove("hidden");
+    showPane("unlocked");
+    await refreshCodes();
+  };
+
+  // Wire interactions
+  retry.addEventListener("click", () => enterAwaiting());
+
+  dismiss.addEventListener("click", async () => {
+    if (refreshTimer) {
+      clearTimeout(refreshTimer);
+      refreshTimer = null;
+    }
+    try {
+      await invoke("lock");
+    } catch (_) {}
+    // The window stays open but goes back to AWAITING_TOUCH on the
+    // next show. For now, hide the panel; tray click reopens.
+    showPane("awaiting");
+    subtitle.textContent = "locked";
+  });
+
+  revealBtn.addEventListener("click", () => {
+    revealed = !revealed;
+    revealBtn.textContent = revealed ? "hide" : "eye";
+    list.querySelectorAll(".digits").forEach((el) => {
+      el.textContent = revealed ? formatCode(el.dataset.code) : "••• •••";
+    });
+  });
+
+  // Backend emits "window:shown" when the user clicks the tray icon
+  // to bring the popup up. Reset to AWAITING_TOUCH each time.
+  listen("window:shown", () => {
+    enterAwaiting();
+  });
+
+  // Kick off on first DOMContentLoaded.
+  enterAwaiting();
 }

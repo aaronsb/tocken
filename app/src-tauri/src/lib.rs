@@ -240,13 +240,21 @@ fn user_facing(err: &StoreError) -> String {
 }
 
 fn toggle_window(app: &tauri::AppHandle) {
+    use tauri::Emitter;
     if let Some(window) = app.get_webview_window("main") {
         if window.is_visible().unwrap_or(false) {
+            // Going hidden: zero the in-memory session so seeds don't
+            // sit in RAM while the window is dismissed (issue #3).
+            if let Some(state) = app.try_state::<SessionState>() {
+                *state.lock().unwrap() = None;
+            }
             let _ = window.hide();
         } else {
             let _ = anchor_top_right(&window);
             let _ = window.show();
             let _ = window.set_focus();
+            // Tell the frontend to re-enter AWAITING_TOUCH.
+            let _ = app.emit("window:shown", ());
         }
     }
 }
