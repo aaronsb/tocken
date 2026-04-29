@@ -99,6 +99,42 @@ mod tests {
     }
 
     #[test]
+    fn multi_recipient_each_decrypts_independently() {
+        let alice = age::x25519::Identity::generate();
+        let bob = age::x25519::Identity::generate();
+        let alice_pub = alice.to_public();
+        let bob_pub = bob.to_public();
+
+        let plaintext = b"shared seed material";
+        let ciphertext = encrypt_to_recipients(
+            plaintext,
+            &[&alice_pub as &dyn Recipient, &bob_pub as &dyn Recipient],
+        )
+        .unwrap();
+
+        let from_alice = decrypt_with_identity(&ciphertext, &alice as &dyn Identity).unwrap();
+        let from_bob = decrypt_with_identity(&ciphertext, &bob as &dyn Identity).unwrap();
+        assert_eq!(from_alice, plaintext);
+        assert_eq!(from_bob, plaintext);
+    }
+
+    #[test]
+    fn x25519_wrong_identity_fails() {
+        let alice = age::x25519::Identity::generate();
+        let stranger = age::x25519::Identity::generate();
+        let ciphertext =
+            encrypt_to_recipients(b"x", &[&alice.to_public() as &dyn Recipient]).unwrap();
+        let result = decrypt_with_identity(&ciphertext, &stranger as &dyn Identity);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn empty_recipient_list_rejected() {
+        let result = encrypt_to_recipients(b"x", &[]);
+        assert!(matches!(result, Err(CryptoError::NoRecipients)));
+    }
+
+    #[test]
     fn passphrase_wrong_phrase_fails() {
         let passphrase = SecretString::from("right");
         let mut recipient = age::scrypt::Recipient::new(passphrase);
