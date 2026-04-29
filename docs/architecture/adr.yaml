@@ -1,0 +1,45 @@
+# ADR Configuration for tocken
+# Used by: docs/scripts/adr
+
+project_name: tocken
+
+# Domain Number Series
+domains:
+  security:
+    range: [100, 199]
+    name: Security
+    description: Crypto choices, threat model, key management, memory hygiene
+    folder: security
+
+  ux:
+    range: [200, 299]
+    name: User Experience
+    description: Tray UX, state machines, configuration, interaction patterns
+    folder: ux
+
+  system:
+    range: [300, 399]
+    name: System Architecture
+    description: Process architecture, IPC, native vs subprocess, dependencies
+    folder: system
+
+  ops:
+    range: [400, 499]
+    name: Operations
+    description: Packaging, distribution, CI/CD, release management
+    folder: ops
+
+# Valid ADR statuses
+statuses:
+  - Draft
+  - Proposed
+  - Accepted
+  - Superseded
+  - Deprecated
+
+# Default values for new ADRs
+defaults:
+  deciders:
+    - aaronsb
+    - claude
+  status: Draft
