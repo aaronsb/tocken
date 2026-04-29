@@ -8,7 +8,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use age::secrecy::SecretString;
 use serde::Serialize;
 use tauri::{
-    menu::{MenuBuilder, MenuItemBuilder},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     LogicalPosition, Manager, Position, State,
 };
@@ -129,6 +128,14 @@ fn hide_window(app: tauri::AppHandle, state: State<'_, SessionState>) -> Result<
         let _ = window.hide();
     }
     Ok(())
+}
+
+#[tauri::command]
+fn quit_app(app: tauri::AppHandle, state: State<'_, SessionState>) {
+    // Drop the session before exit so seeds don't sit in RAM during
+    // shutdown teardown.
+    *state.lock().unwrap() = None;
+    app.exit(0);
 }
 
 #[derive(Serialize)]
@@ -294,32 +301,19 @@ pub fn run() {
             unlock,
             get_codes,
             lock,
-            hide_window
+            hide_window,
+            quit_app
         ])
         .setup(|app| {
-            let show_item = MenuItemBuilder::with_id("show", "Activate").build(app)?;
-            let quit_item = MenuItemBuilder::with_id("quit", "Quit").build(app)?;
-            let menu = MenuBuilder::new(app)
-                .items(&[&show_item, &quit_item])
-                .build()?;
-
+            // No tray menu. libayatana-appindicator on Wayland doesn't
+            // honor show_menu_on_left_click(false) reliably — the
+            // compositor decides whether a menu pops on click. With no
+            // menu attached, left-click goes straight to the
+            // tray-icon click handler. Quit lives inside the window
+            // (footer button).
             let _tray = TrayIconBuilder::with_id("tocken-tray")
                 .icon(app.default_window_icon().unwrap().clone())
-                .tooltip("tocken")
-                .menu(&menu)
-                .show_menu_on_left_click(false)
-                .on_menu_event(|app, event| match event.id().as_ref() {
-                    // Menu's "Activate" mirrors the tray left-click
-                    // gesture. Some compositors (Wayland with no
-                    // proper StatusNotifierItem support) route tray
-                    // clicks through this menu item rather than the
-                    // tray-icon click handler below; unifying the
-                    // semantics keeps behavior predictable across
-                    // both routings.
-                    "show" => activate_window(app),
-                    "quit" => app.exit(0),
-                    _ => {}
-                })
+                .tooltip("tocken — click to activate")
                 .on_tray_icon_event(|tray, event| {
                     if let TrayIconEvent::Click {
                         button: MouseButton::Left,
@@ -327,8 +321,6 @@ pub fn run() {
                         ..
                     } = event
                     {
-                        // Left-click always activates: show, focus,
-                        // drop session, fire AWAITING_TOUCH.
                         activate_window(tray.app_handle());
                     }
                 })

@@ -298,6 +298,7 @@ function initCodePanel(root) {
   const retry = root.querySelector("#retry-unlock");
   const errorRetry = root.querySelector("#error-retry");
   const dismiss = root.querySelector("#dismiss");
+  const quitBtn = root.querySelector("#quit-btn");
   const revealBtn = root.querySelector("#reveal-toggle");
   const subtitle = root.querySelector("#main-subtitle");
   const toast = document.querySelector("#code-toast");
@@ -482,12 +483,24 @@ function initCodePanel(root) {
       clearTimeout(refreshTimer);
       refreshTimer = null;
     }
-    // Same code path as tray-click-while-visible: drops the session
-    // and hides the window. JS state resets on the next window:shown.
+    // Drops the session and hides the window. JS state resets on the
+    // next tray click via window:shown.
     try {
       await invoke("hide_window");
     } catch (err) {
       console.error("hide_window:", err);
+    }
+  });
+
+  quitBtn.addEventListener("click", async () => {
+    if (refreshTimer) {
+      clearTimeout(refreshTimer);
+      refreshTimer = null;
+    }
+    try {
+      await invoke("quit_app");
+    } catch (err) {
+      console.error("quit_app:", err);
     }
   });
 
