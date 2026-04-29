@@ -1,4 +1,5 @@
 mod store;
+mod wizard;
 
 use std::io::Write;
 use std::process::{Command, Stdio};
@@ -30,6 +31,12 @@ struct DecryptStoreResult {
     store_path: String,
     master_path: String,
     created: bool,
+}
+
+#[tauri::command]
+fn is_initialized() -> Result<bool, String> {
+    let paths = StorePaths::resolve().map_err(|e| e.to_string())?;
+    Ok(paths.master.exists() && paths.store.exists())
 }
 
 #[tauri::command]
@@ -193,7 +200,11 @@ fn anchor_top_right(window: &tauri::WebviewWindow) -> tauri::Result<()> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![verify_touch, decrypt_store])
+        .invoke_handler(tauri::generate_handler![
+            verify_touch,
+            decrypt_store,
+            is_initialized
+        ])
         .setup(|app| {
             let show_item = MenuItemBuilder::with_id("show", "Show / hide").build(app)?;
             let quit_item = MenuItemBuilder::with_id("quit", "Quit").build(app)?;

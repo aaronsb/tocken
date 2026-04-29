@@ -104,6 +104,79 @@ pre {
   user-select: text;
 }
 
+.hidden {
+  display: none !important;
+}
+
+.wizard {
+  gap: 14px;
+}
+
+.wizard h2 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.wizard p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.45;
+  color: #cccccc;
+}
+
+.wizard .warn {
+  background: #3a2a1a;
+  border: 1px solid #5d4524;
+  color: #f0d8a8;
+  padding: 10px;
+  border-radius: 6px;
+}
+
+.wizard input[type="text"] {
+  background: #0e1014;
+  color: #eaeaea;
+  border: 1px solid #2a2d36;
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 13px;
+  font-family: inherit;
+  width: 100%;
+}
+
+.wizard input[type="text"]:focus {
+  outline: none;
+  border-color: #3b82f6;
+}
+
+.wizard pre {
+  font-size: 14px;
+  padding: 12px;
+  user-select: none;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  letter-spacing: 0.02em;
+}
+
+.wizard .row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.wizard .row > button:not(.touch) {
+  background: transparent;
+  color: #cccccc;
+  border: 1px solid #2a2d36;
+  border-radius: 6px;
+  padding: 8px 12px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.wizard .row > button:not(.touch):hover {
+  background: #1a1d23;
+}
+
 .ctx-menu {
   position: fixed;
   background: #20242c;

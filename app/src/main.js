@@ -1,6 +1,25 @@
 const { invoke } = window.__TAURI__.core;
 
-window.addEventListener("DOMContentLoaded", () => {
+const WIZARD_STEPS = ["welcome", "passphrase", "confirm", "yubikey", "location", "done"];
+
+window.addEventListener("DOMContentLoaded", async () => {
+  const mainPanel = document.querySelector("#main-panel");
+  const wizard = document.querySelector("#wizard");
+
+  try {
+    const initialized = await invoke("is_initialized");
+    if (initialized) {
+      mainPanel.classList.remove("hidden");
+    } else {
+      wizard.classList.remove("hidden");
+      initWizard(wizard);
+    }
+  } catch (err) {
+    // Fail open to main panel; wizard logic comes online in subsequent tasks.
+    console.error("is_initialized failed:", err);
+    mainPanel.classList.remove("hidden");
+  }
+
   const btn = document.querySelector("#touch-btn");
   const status = document.querySelector("#status");
   const details = document.querySelector("#details-body");
@@ -74,3 +93,25 @@ window.addEventListener("DOMContentLoaded", () => {
     hideCtx();
   });
 });
+
+// Wizard scaffold. Step transitions are wired in task #12; this lays
+// out the show/hide plumbing so each pane can advance via [data-next].
+function initWizard(root) {
+  const stepLabel = root.querySelector("#wizard-step-label");
+  const panes = Array.from(root.querySelectorAll(".wizard-pane"));
+  let index = 0;
+
+  const showStep = (i) => {
+    panes.forEach((p, j) => p.classList.toggle("hidden", i !== j));
+    stepLabel.textContent = WIZARD_STEPS[i] ?? "";
+    index = i;
+  };
+
+  root.addEventListener("click", (e) => {
+    const next = e.target.closest("[data-next]");
+    if (!next || next.disabled) return;
+    if (index < panes.length - 1) showStep(index + 1);
+  });
+
+  showStep(0);
+}
