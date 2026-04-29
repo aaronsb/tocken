@@ -1,12 +1,15 @@
 //! Hardware spike (task #23) for #3.
 //!
 //! Verifies that `age::plugin::IdentityPluginV1` decrypts via
-//! `age-plugin-yubikey` while invoking our `Callbacks::display_message`
-//! at least once. The structural unknown is NOT the decrypt call itself
-//! (mechanical) but that the callback path fires from inside the plugin
-//! during decrypt without deadlocking the host. If `display_message`
-//! never fires, the wizard pattern of "touch the key when blinking"
-//! has no surface for us to render — we'd need a different mechanism.
+//! `age-plugin-yubikey` end-to-end on hardware. Originally the spike
+//! also asserted that `Callbacks::display_message` fired at least once
+//! during the decrypt path; **empirically it does not** — the plugin
+//! relies on the YubiKey's physical LED for the touch-required signal
+//! rather than emitting a message frame to the host. The counter is
+//! retained as a `println!` so future plugin behavior changes are
+//! visible, but not asserted. Implication for #3: AWAITING_TOUCH
+//! renders a static "touch your YubiKey" message from the moment we
+//! invoke `unlock`; no programmatic blink-detection is needed.
 //!
 //! Run with: `make test-hw`.
 
@@ -103,13 +106,10 @@ fn identity_plugin_decrypt_round_trip_with_callbacks() {
     reader.read_to_end(&mut recovered).expect("read decrypted plaintext");
 
     assert_eq!(recovered, plaintext, "plaintext mismatch");
-    assert!(
-        probe.fired.load(Ordering::Acquire),
-        "Callbacks::display_message never fired during decrypt — \
-         the touch-prompt UX surface for #3 needs a different mechanism"
-    );
     eprintln!(
-        "[spike] display_message fired {} time(s); callback path is wired",
+        "[spike] decrypt round-trip OK; display_message fired {} time(s) \
+         (current age-plugin-yubikey relies on LED, not host messages — \
+         #3 renders a static touch prompt instead)",
         probe.display_count.load(Ordering::Acquire)
     );
 }
