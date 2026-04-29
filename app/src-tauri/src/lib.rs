@@ -248,12 +248,32 @@ fn user_facing(err: &StoreError) -> String {
     .into()
 }
 
-fn toggle_window(app: &tauri::AppHandle) {
+/// Tray left-click: always activate. Show + focus + drop any active
+/// session + tell the frontend to re-enter AWAITING_TOUCH. Tray click
+/// is the "activate tocken" gesture; every click re-prompts for a
+/// touch even if the window is already visible. Predictable security
+/// model: if you clicked the tray, you're committing to a fresh
+/// authentication.
+fn activate_window(app: &tauri::AppHandle) {
+    use tauri::Emitter;
+    if let Some(window) = app.get_webview_window("main") {
+        if let Some(state) = app.try_state::<SessionState>() {
+            *state.lock().unwrap() = None;
+        }
+        let _ = anchor_top_right(&window);
+        let _ = window.show();
+        let _ = window.set_focus();
+        let _ = app.emit("window:shown", ());
+    }
+}
+
+/// Right-click menu's Show/hide: simple visibility toggle. Hiding
+/// drops the session (same security model as #3's dismiss button);
+/// showing re-prompts via window:shown.
+fn toggle_visibility(app: &tauri::AppHandle) {
     use tauri::Emitter;
     if let Some(window) = app.get_webview_window("main") {
         if window.is_visible().unwrap_or(false) {
-            // Going hidden: zero the in-memory session so seeds don't
-            // sit in RAM while the window is dismissed (issue #3).
             if let Some(state) = app.try_state::<SessionState>() {
                 *state.lock().unwrap() = None;
             }
@@ -262,7 +282,6 @@ fn toggle_window(app: &tauri::AppHandle) {
             let _ = anchor_top_right(&window);
             let _ = window.show();
             let _ = window.set_focus();
-            // Tell the frontend to re-enter AWAITING_TOUCH.
             let _ = app.emit("window:shown", ());
         }
     }
@@ -309,7 +328,11 @@ pub fn run() {
                 .menu(&menu)
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id().as_ref() {
-                    "show" => toggle_window(app),
+                    // Right-click menu Show/hide is a simple toggle —
+                    // doesn't force re-lock if it's just bringing the
+                    // window back. Left-click is the "activate"
+                    // gesture, handled below.
+                    "show" => toggle_visibility(app),
                     "quit" => app.exit(0),
                     _ => {}
                 })
@@ -320,7 +343,9 @@ pub fn run() {
                         ..
                     } = event
                     {
-                        toggle_window(tray.app_handle());
+                        // Left-click always activates: show, focus,
+                        // drop session, fire AWAITING_TOUCH.
+                        activate_window(tray.app_handle());
                     }
                 })
                 .build(app)?;
