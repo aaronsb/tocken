@@ -40,6 +40,19 @@ fn is_initialized() -> Result<bool, String> {
 }
 
 #[tauri::command]
+fn generate_passphrase() -> String {
+    // TODO(#13): the SecretString is dropped at end of scope, but the
+    // returned String crosses IPC and lives in the JS heap until the
+    // user navigates past the passphrase pane. Wizard UX intentionally
+    // disables click-to-copy to reduce clipboard exfiltration; the
+    // heap residue itself is #13's concern.
+    use age::secrecy::ExposeSecret;
+    wizard::passphrase::generate(wizard::passphrase::DEFAULT_WORDS)
+        .expose_secret()
+        .to_string()
+}
+
+#[tauri::command]
 fn decrypt_store(passphrase: String) -> Result<DecryptStoreResult, String> {
     // TODO(#13): passphrase arrives as a String from the IPC layer and
     // sits in the JS engine's heap before this point — full memory
@@ -203,7 +216,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             verify_touch,
             decrypt_store,
-            is_initialized
+            is_initialized,
+            generate_passphrase
         ])
         .setup(|app| {
             let show_item = MenuItemBuilder::with_id("show", "Show / hide").build(app)?;
