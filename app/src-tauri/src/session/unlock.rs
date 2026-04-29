@@ -122,9 +122,15 @@ fn classify_decrypt_error(err: &age::DecryptError) -> UnlockError {
     let msg = format!("{err}").to_lowercase();
     if msg.contains("plugin") && msg.contains("missing") {
         UnlockError::PluginMissing
-    } else if msg.contains("no matching") || msg.contains("could not unwrap") {
-        // Plugin returned without a usable file key; most common cause
-        // on this hardware path is "user didn't touch in time."
+    } else if msg.contains("no matching")
+        || msg.contains("could not unwrap")
+        || msg.contains("failed to decrypt")
+        || msg.contains("stanza")
+    {
+        // Hardware-path failure modes that all surface as the same UX:
+        // "touch not registered, or this YubiKey doesn't match the one
+        // that encrypted the store." User retries (or runs the wizard
+        // again if the slot was reprovisioned).
         UnlockError::TouchTimeoutOrMismatch
     } else {
         UnlockError::Other(format!("decrypt: {err}"))

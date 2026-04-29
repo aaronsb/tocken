@@ -400,6 +400,10 @@ function initCodePanel(root) {
 
   const handleUnlockError = (err) => {
     if (err && err.kind === "TouchTimeout") {
+      // Same pane covers genuine touch-timeouts and YubiKey-identity
+      // mismatches. Retry triggers a fresh unlock; if the mismatch is
+      // structural (e.g., slot reprovisioned), the user re-runs the
+      // wizard. We don't try to disambiguate further from the IPC.
       showPane("timeout");
       return;
     }
