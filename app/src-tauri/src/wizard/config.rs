@@ -27,6 +27,9 @@ pub enum ConfigError {
 }
 
 impl Config {
+    // TODO(#3, #8): consumed by the code-panel state machine and the
+    // settings UI; the wizard only writes config, doesn't read it.
+    #[allow(dead_code)]
     pub fn load(path: &Path) -> Result<Self, ConfigError> {
         if !path.exists() {
             return Ok(Self::default());
