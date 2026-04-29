@@ -2,15 +2,50 @@ mod session;
 mod store;
 mod wizard;
 
+use std::sync::Mutex;
+use std::time::{SystemTime, UNIX_EPOCH};
+
 use age::secrecy::SecretString;
 use serde::Serialize;
 use tauri::{
     menu::{MenuBuilder, MenuItemBuilder},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    LogicalPosition, Manager, Position,
+    LogicalPosition, Manager, Position, State,
 };
 
+use session::unlock::{self, UnlockErrorIpc};
+use session::{EntryCode, Session};
 use store::{Store, StoreError, StorePaths};
+
+/// Tauri-managed global session. None when the user hasn't unlocked
+/// yet (or has dismissed / re-locked); Some after a successful unlock.
+type SessionState = Mutex<Option<Session>>;
+
+#[derive(Serialize)]
+struct EntrySummary {
+    id: String,
+    issuer: String,
+    account: String,
+}
+
+#[derive(Serialize)]
+struct UnlockResult {
+    entries: Vec<EntrySummary>,
+}
+
+#[derive(Serialize)]
+#[serde(tag = "kind")]
+enum CodesResponse {
+    Locked,
+    Codes { codes: Vec<EntryCode> },
+}
+
+fn now_unix() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
 
 #[derive(Serialize)]
 struct DecryptStoreResult {
@@ -25,6 +60,66 @@ struct DecryptStoreResult {
 fn is_initialized() -> Result<bool, String> {
     let paths = StorePaths::resolve().map_err(|e| e.to_string())?;
     Ok(paths.master.exists() && paths.store.exists())
+}
+
+#[tauri::command]
+fn unlock(state: State<'_, SessionState>) -> Result<UnlockResult, UnlockErrorIpc> {
+    let paths = StorePaths::resolve().map_err(|e| {
+        eprintln!("unlock: paths failed: {e:#}");
+        UnlockErrorIpc::Other {
+            detail: "could not resolve storage paths".into(),
+        }
+    })?;
+
+    let store_file = unlock::decrypt_store_with_yubikey(&paths).map_err(|e| {
+        eprintln!("unlock failed: {e:#}");
+        UnlockErrorIpc::from(&e)
+    })?;
+
+    let summaries: Vec<EntrySummary> = store_file
+        .entries
+        .iter()
+        .filter(|e| matches!(e.kind, store::EntryKind::Totp))
+        .map(|e| EntrySummary {
+            id: e.id.clone(),
+            issuer: e.issuer.clone(),
+            account: e.account.clone(),
+        })
+        .collect();
+
+    let session = Session::new(store_file.entries, now_unix());
+    *state.lock().unwrap() = Some(session);
+
+    Ok(UnlockResult { entries: summaries })
+}
+
+#[tauri::command]
+fn get_codes(state: State<'_, SessionState>) -> Result<CodesResponse, String> {
+    let mut guard = state.lock().unwrap();
+    let now = now_unix();
+
+    let should_relock = guard
+        .as_ref()
+        .map(|s| s.should_relock(now))
+        .unwrap_or(true);
+    if should_relock {
+        // Drop the session — Entry's SecretString fields zeroize.
+        *guard = None;
+        return Ok(CodesResponse::Locked);
+    }
+
+    let session = guard.as_ref().unwrap();
+    let codes = session.codes(now).map_err(|e| {
+        eprintln!("get_codes failed: {e:#}");
+        "could not generate codes".to_string()
+    })?;
+    Ok(CodesResponse::Codes { codes })
+}
+
+#[tauri::command]
+fn lock(state: State<'_, SessionState>) -> Result<(), String> {
+    *state.lock().unwrap() = None;
+    Ok(())
 }
 
 #[derive(Serialize)]
@@ -171,13 +266,17 @@ fn anchor_top_right(window: &tauri::WebviewWindow) -> tauri::Result<()> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .manage::<SessionState>(Mutex::new(None))
         .invoke_handler(tauri::generate_handler![
             decrypt_store,
             is_initialized,
             generate_passphrase,
             detect_yubikey,
             provision_yubikey,
-            finalize_init
+            finalize_init,
+            unlock,
+            get_codes,
+            lock
         ])
         .setup(|app| {
             let show_item = MenuItemBuilder::with_id("show", "Show / hide").build(app)?;

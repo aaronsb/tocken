@@ -5,6 +5,7 @@
 //! since unlock) crosses LOCK_AFTER_ROTATIONS).
 
 pub mod totp;
+pub mod unlock;
 
 #[cfg(test)]
 mod spike;
@@ -46,10 +47,6 @@ impl Session {
             entries,
             unlocked_at_unix: now_unix,
         }
-    }
-
-    pub fn entry_count(&self) -> usize {
-        self.entries.iter().filter(|e| matches!(e.kind, EntryKind::Totp)).count()
     }
 
     /// Number of period boundaries crossed for entry `idx` since unlock.
@@ -190,7 +187,6 @@ mod tests {
         hotp.kind = EntryKind::Hotp;
         let entries = vec![make_entry("totp", 30), hotp];
         let session = Session::new(entries, 1_700_000_000);
-        assert_eq!(session.entry_count(), 1);
         assert_eq!(session.codes(1_700_000_000).unwrap().len(), 1);
     }
 
