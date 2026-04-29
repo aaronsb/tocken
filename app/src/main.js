@@ -237,7 +237,9 @@ function initWizard(root) {
       if (finish.dataset.bound) return;
       finish.dataset.bound = "1";
       finish.addEventListener("click", () => {
-        // Hand off to the main panel. Reload is the simplest re-init.
+        // Reload re-runs is_initialized: on success it lands on the
+        // main panel; on prior finalize_init failure (no store written)
+        // it re-enters the wizard from welcome — a clean retry.
         window.location.reload();
       });
     },
