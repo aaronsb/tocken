@@ -267,25 +267,6 @@ fn activate_window(app: &tauri::AppHandle) {
     }
 }
 
-/// Right-click menu's Show/hide: simple visibility toggle. Hiding
-/// drops the session (same security model as #3's dismiss button);
-/// showing re-prompts via window:shown.
-fn toggle_visibility(app: &tauri::AppHandle) {
-    use tauri::Emitter;
-    if let Some(window) = app.get_webview_window("main") {
-        if window.is_visible().unwrap_or(false) {
-            if let Some(state) = app.try_state::<SessionState>() {
-                *state.lock().unwrap() = None;
-            }
-            let _ = window.hide();
-        } else {
-            let _ = anchor_top_right(&window);
-            let _ = window.show();
-            let _ = window.set_focus();
-            let _ = app.emit("window:shown", ());
-        }
-    }
-}
 
 fn anchor_top_right(window: &tauri::WebviewWindow) -> tauri::Result<()> {
     if let Some(monitor) = window.current_monitor()? {
@@ -316,7 +297,7 @@ pub fn run() {
             hide_window
         ])
         .setup(|app| {
-            let show_item = MenuItemBuilder::with_id("show", "Show / hide").build(app)?;
+            let show_item = MenuItemBuilder::with_id("show", "Activate").build(app)?;
             let quit_item = MenuItemBuilder::with_id("quit", "Quit").build(app)?;
             let menu = MenuBuilder::new(app)
                 .items(&[&show_item, &quit_item])
@@ -328,11 +309,14 @@ pub fn run() {
                 .menu(&menu)
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id().as_ref() {
-                    // Right-click menu Show/hide is a simple toggle —
-                    // doesn't force re-lock if it's just bringing the
-                    // window back. Left-click is the "activate"
-                    // gesture, handled below.
-                    "show" => toggle_visibility(app),
+                    // Menu's "Activate" mirrors the tray left-click
+                    // gesture. Some compositors (Wayland with no
+                    // proper StatusNotifierItem support) route tray
+                    // clicks through this menu item rather than the
+                    // tray-icon click handler below; unifying the
+                    // semantics keeps behavior predictable across
+                    // both routings.
+                    "show" => activate_window(app),
                     "quit" => app.exit(0),
                     _ => {}
                 })
