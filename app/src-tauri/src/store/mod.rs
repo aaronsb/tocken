@@ -548,4 +548,51 @@ mod tests {
             "unexpected temp files: {stragglers:?}"
         );
     }
+
+    /// Hardware-gated: round-trips a real `age-plugin-yubikey` recipient
+    /// through `recipients.txt` and confirms `parse_recipients_file`
+    /// constructs a usable plugin recipient. Run via `make test-hw` or
+    /// `make check-yubi`.
+    ///
+    /// The construction step (`RecipientPluginV1::new` inside
+    /// `parse_recipients_file`) probes the plugin binary but does not
+    /// engage the YubiKey hardware. So this test does not require a
+    /// touch — only that `age-plugin-yubikey` is on PATH and at least
+    /// one identity is provisioned. Encrypt-decrypt round-trip with the
+    /// real key is already covered by `session::spike`.
+    #[test]
+    #[ignore = "requires a YubiKey with age-plugin-yubikey provisioned"]
+    fn parse_recipients_file_accepts_real_yubikey_plugin_recipient() {
+        let identity_text = std::process::Command::new("age-plugin-yubikey")
+            .arg("--identity")
+            .output()
+            .expect("age-plugin-yubikey: is it on PATH?");
+        assert!(identity_text.status.success(), "plugin --identity failed");
+        let stdout = String::from_utf8(identity_text.stdout).unwrap();
+        let yubi_recipient = stdout
+            .lines()
+            .find_map(|l| {
+                l.trim_start_matches('#')
+                    .trim()
+                    .strip_prefix("Recipient:")
+                    .map(|v| v.trim().to_string())
+            })
+            .expect("Recipient: line in --identity output");
+        assert!(
+            yubi_recipient.starts_with("age1yubikey1"),
+            "expected plugin recipient, got: {yubi_recipient}"
+        );
+
+        let master = x25519::Identity::generate();
+        let body = format!(
+            "# tocken recipients (test fixture)\n{}\n{}\n",
+            master.to_public(),
+            yubi_recipient
+        );
+        let (master_pub, extras) =
+            parse_recipients_file(&body).expect("parse with real plugin recipient should succeed");
+        assert_eq!(master_pub.to_string(), master.to_public().to_string());
+        assert_eq!(extras.len(), 1);
+        assert_eq!(extras[0].bech32, yubi_recipient);
+    }
 }

@@ -49,6 +49,9 @@ lint: ## cargo clippy
 .PHONY: check
 check: fmt-check lint test ## run fmt-check + lint + test (pre-PR gate)
 
+.PHONY: check-yubi
+check-yubi: check test-hw ## check + the hardware-gated tests; touch the YubiKey when prompted
+
 .PHONY: clean
 clean: ## cargo clean
 	cd $(TAURI_DIR) && cargo clean
