@@ -79,13 +79,11 @@ impl Store {
         passphrase: SecretString,
     ) -> Result<Self, StoreError> {
         let master_ciphertext = std::fs::read(&paths.master)?;
-        let master_plaintext =
-            crypto::decrypt_with_passphrase(&master_ciphertext, passphrase)?;
+        let master_plaintext = crypto::decrypt_with_passphrase(&master_ciphertext, passphrase)?;
         let master = parse_master(&master_plaintext)?;
 
         let store_ciphertext = std::fs::read(&paths.store)?;
-        let plaintext =
-            crypto::decrypt_with_identity(&store_ciphertext, &master as &dyn Identity)?;
+        let plaintext = crypto::decrypt_with_identity(&store_ciphertext, &master as &dyn Identity)?;
         let text = std::str::from_utf8(&plaintext)
             .map_err(|_| StoreError::InvalidStorePayload("not valid UTF-8"))?;
         let file = format::deserialize(text)?;
@@ -186,8 +184,7 @@ mod tests {
         use ::secrecy::ExposeSecret;
         let (_tmp, paths) = tmp_paths();
         let passphrase = SecretString::from("recovery");
-        let mut store =
-            Store::create(paths.clone(), passphrase.clone(), Vec::new()).unwrap();
+        let mut store = Store::create(paths.clone(), passphrase.clone(), Vec::new()).unwrap();
         store.add_entry(Entry {
             id: "01h9z0e3mq6kngd5gp7w4tnsx2".into(),
             issuer: "Google".into(),
@@ -233,12 +230,7 @@ mod tests {
     #[test]
     fn wrong_passphrase_fails_to_open() {
         let (_tmp, paths) = tmp_paths();
-        let _ = Store::create(
-            paths.clone(),
-            SecretString::from("right"),
-            Vec::new(),
-        )
-        .unwrap();
+        let _ = Store::create(paths.clone(), SecretString::from("right"), Vec::new()).unwrap();
         let result = Store::open_with_passphrase(paths, SecretString::from("wrong"));
         assert!(result.is_err());
     }

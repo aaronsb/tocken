@@ -93,8 +93,7 @@ mod tests {
         let mut identity = age::scrypt::Identity::new(passphrase);
         identity.set_max_work_factor(2);
         let decryptor = Decryptor::new_buffered(ciphertext.as_slice()).unwrap();
-        let recovered =
-            decrypt(decryptor, std::iter::once(&identity as &dyn Identity)).unwrap();
+        let recovered = decrypt(decryptor, std::iter::once(&identity as &dyn Identity)).unwrap();
         assert_eq!(recovered, plaintext);
     }
 
