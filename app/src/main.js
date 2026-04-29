@@ -221,29 +221,56 @@ function initWizard(root) {
 
     done: async (pane) => {
       const finish = pane.querySelector("#wizard-finish");
+      const summary = pane.querySelector("p");
       finish.disabled = true;
+
       try {
         const result = await invoke("finalize_init", {
           passphrase: ctx.passphrase,
           yubikeyRecipient: ctx.yubikeyRecipient,
         });
-        const summary = pane.querySelector("p");
-        summary.textContent = `Created: ${result.store_path}`;
-        finish.disabled = false;
+        summary.textContent =
+          `Created at ${result.store_path}. Touch your YubiKey to verify the setup works.`;
       } catch (err) {
-        const summary = pane.querySelector("p");
         summary.textContent = `Setup failed: ${err}`;
+        finish.disabled = false;
+        bindFinish(finish);
+        return;
       }
 
-      if (finish.dataset.bound) return;
-      finish.dataset.bound = "1";
-      finish.addEventListener("click", () => {
-        // Reload re-runs is_initialized: on success it lands on the
-        // main panel; on prior finalize_init failure (no store written)
-        // it re-enters the wizard from welcome — a clean retry.
-        window.location.reload();
-      });
+      // Verification unlock: catches any setup mismatch (slot /
+      // identity / pathing) inside the wizard rather than dropping the
+      // user onto the main panel mid-touch. Leaves the session
+      // unlocked; main-panel post-reload sees the active session and
+      // skips its own unlock prompt.
+      try {
+        await invoke("unlock");
+        summary.textContent = "All set. Click Open to start using tocken.";
+        finish.disabled = false;
+      } catch (err) {
+        if (err && err.kind === "TouchTimeout") {
+          summary.textContent =
+            "Verification touch didn't register. Click Open and retry from the main panel.";
+        } else {
+          summary.textContent =
+            `Verification failed (${err && err.kind ? err.kind : err}). Click Open to retry from the main panel.`;
+        }
+        finish.disabled = false;
+      }
+
+      bindFinish(finish);
     },
+  };
+
+  function bindFinish(finish) {
+    if (finish.dataset.bound) return;
+    finish.dataset.bound = "1";
+    finish.addEventListener("click", () => {
+      // Reload re-runs is_initialized: on success it lands on the
+      // main panel; on prior finalize_init failure (no store written)
+      // it re-enters the wizard from welcome — a clean retry.
+      window.location.reload();
+    });
   };
 
   showStep(0);
@@ -471,14 +498,35 @@ function initCodePanel(root) {
 
   // Two startup paths land here:
   //   - Cold launch: window is hidden (tauri.conf: visible=false).
-  //     Don't fire unlock — the user wouldn't see the LED. Wait for
-  //     window:shown.
-  //   - Post-wizard reload: window is already visible (the user just
-  //     finished setup and clicked Open). No window:shown fires
-  //     because there's no hide→show transition. Fire unlock now so
-  //     the LED blinks and the user can touch through.
+  //     Wait for window:shown.
+  //   - Post-wizard reload: window is already visible (the user
+  //     completed the wizard, which did its own verification unlock).
+  //     The backend session is already unlocked, so try get_codes
+  //     first — if it returns Codes, render directly without
+  //     prompting for another touch. Only fall back to enterAwaiting
+  //     if the backend says the session is Locked.
   const win = window.__TAURI__.window.getCurrentWindow();
-  win.isVisible().then((visible) => {
-    if (visible) enterAwaiting();
+  win.isVisible().then(async (visible) => {
+    if (!visible) return;
+    try {
+      const response = await invoke("get_codes");
+      if (response.kind === "Codes") {
+        subtitle.textContent = "unlocked";
+        revealBtn.classList.remove("hidden");
+        showPane("unlocked");
+        renderCodes(response.codes);
+        if (response.codes.length > 0) {
+          const minRemaining = Math.min(
+            ...response.codes.map((c) => c.time_remaining)
+          );
+          const ms = (minRemaining > 0 ? minRemaining : 1) * 1000 + 200;
+          refreshTimer = setTimeout(refreshCodes, ms);
+        }
+        return;
+      }
+    } catch (err) {
+      console.error("startup get_codes:", err);
+    }
+    enterAwaiting();
   });
 }
