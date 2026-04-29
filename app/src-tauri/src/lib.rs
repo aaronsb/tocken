@@ -39,6 +39,52 @@ fn is_initialized() -> Result<bool, String> {
     Ok(paths.master.exists() && paths.store.exists())
 }
 
+#[derive(Serialize)]
+struct FinalizeResult {
+    store_path: String,
+    master_path: String,
+    config_path: String,
+}
+
+#[tauri::command]
+fn finalize_init(
+    passphrase: String,
+    yubikey_recipient: String,
+) -> Result<FinalizeResult, String> {
+    // TODO(#13): passphrase arrives as String over IPC; same residue
+    // concern as decrypt_store. Move into SecretString here and drop
+    // the String at end of scope.
+    let paths = StorePaths::resolve().map_err(|e| {
+        eprintln!("finalize_init: paths failed: {e:#}");
+        format!("could not resolve storage paths: {e}")
+    })?;
+
+    let recipient = wizard::yubikey::recipient_from_string(&yubikey_recipient).map_err(|e| {
+        eprintln!("finalize_init: recipient parse failed: {e:#}");
+        "YubiKey recipient is not a valid plugin recipient".to_string()
+    })?;
+
+    let secret = SecretString::from(passphrase);
+    Store::create(paths.clone(), secret, vec![recipient]).map_err(|e| {
+        eprintln!("finalize_init: Store::create failed: {e:#}");
+        user_facing(&e)
+    })?;
+
+    let config = wizard::config::Config {
+        yubikey_recipient: Some(yubikey_recipient),
+    };
+    config.save(&paths.config).map_err(|e| {
+        eprintln!("finalize_init: config save failed: {e:#}");
+        format!("could not write config: {e}")
+    })?;
+
+    Ok(FinalizeResult {
+        store_path: paths.store.display().to_string(),
+        master_path: paths.master.display().to_string(),
+        config_path: paths.config.display().to_string(),
+    })
+}
+
 #[tauri::command]
 fn detect_yubikey() -> Result<wizard::yubikey::DetectResult, String> {
     wizard::yubikey::detect().map_err(|e| {
@@ -235,7 +281,8 @@ pub fn run() {
             is_initialized,
             generate_passphrase,
             detect_yubikey,
-            provision_yubikey
+            provision_yubikey,
+            finalize_init
         ])
         .setup(|app| {
             let show_item = MenuItemBuilder::with_id("show", "Show / hide").build(app)?;
