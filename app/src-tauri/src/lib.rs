@@ -24,33 +24,47 @@ use store::{NamedRecipient, Store, StoreError, StorePaths};
 
 /// Tauri-managed global session.
 ///
-/// `session` is None when the user hasn't unlocked (or has dismissed /
+/// `state` is None when the user hasn't unlocked (or has dismissed /
 /// re-locked); Some after a successful unlock.
 ///
-/// `generation` is a monotonic counter bumped every time the session is
+/// The `Unlocked` wrapper pairs the canonical `Store` (used for
+/// re-encrypt on enrollment / mutation per #27) with a `Session` view
+/// over its entries (used for code generation and re-lock countdown).
+/// After mutations the Session is rebuilt from the Store's updated
+/// entries; the Store is the source of truth.
+///
+/// `generation` is a monotonic counter bumped every time the state is
 /// dropped externally (`activate_window`, `hide_window`, `lock`,
 /// `quit_app`). The `unlock` command captures the generation at start
-/// and refuses to install the decrypted Session if the counter has
+/// and refuses to install the decrypted state if the counter has
 /// advanced since. Without this, a long-running unlock IPC could race
 /// `activate_window`'s "fresh activation" gesture: the user clicks the
 /// tray during the 15s touch wait, `activate_window` clears the state,
-/// but the in-flight `unlock` still writes `Some(session)` afterward,
+/// but the in-flight `unlock` still writes `Some(...)` afterward,
 /// silently undoing the user's intent.
 struct SessionInner {
-    session: Option<Session>,
+    state: Option<Unlocked>,
     generation: u64,
+}
+
+struct Unlocked {
+    /// Source of truth for entries; mutated by future enrollment (#6) and
+    /// account-management (#9) commands. Read-only during code display.
+    #[allow(dead_code)]
+    store: Store,
+    session: Session,
 }
 
 impl SessionInner {
     fn new() -> Self {
         Self {
-            session: None,
+            state: None,
             generation: 0,
         }
     }
 
     fn invalidate(&mut self) {
-        self.session = None;
+        self.state = None;
         self.generation = self.generation.wrapping_add(1);
     }
 }
@@ -114,13 +128,13 @@ fn unlock(state: State<'_, SessionState>) -> Result<UnlockResult, UnlockErrorIpc
     // than silently undoing the user's intent.
     let gen_at_start = state.lock().unwrap().generation;
 
-    let store_file = unlock::decrypt_store_with_yubikey(&paths).map_err(|e| {
+    let store = unlock::decrypt_store_with_yubikey(&paths).map_err(|e| {
         eprintln!("unlock failed: {e:#}");
         UnlockErrorIpc::from(&e)
     })?;
 
-    let summaries: Vec<EntrySummary> = store_file
-        .entries
+    let summaries: Vec<EntrySummary> = store
+        .entries()
         .iter()
         .filter(|e| matches!(e.kind, store::EntryKind::Totp))
         .map(|e| EntrySummary {
@@ -130,16 +144,16 @@ fn unlock(state: State<'_, SessionState>) -> Result<UnlockResult, UnlockErrorIpc
         })
         .collect();
 
-    let session = Session::new(store_file.entries, now_unix());
+    let session = Session::new(store.entries().to_vec(), now_unix());
     let mut inner = state.lock().unwrap();
     if inner.generation != gen_at_start {
         // Stale unlock — user re-activated during the touch wait.
-        // Drop `session` (Entry's SecretString fields zeroize) and
-        // surface as a touch timeout so the frontend re-prompts.
-        eprintln!("unlock: stale (generation advanced); discarding decrypted session");
+        // Drop `store + session` (Entry's SecretString fields zeroize)
+        // and surface as a touch timeout so the frontend re-prompts.
+        eprintln!("unlock: stale (generation advanced); discarding decrypted state");
         return Err(UnlockErrorIpc::TouchTimeout);
     }
-    inner.session = Some(session);
+    inner.state = Some(Unlocked { store, session });
 
     Ok(UnlockResult { entries: summaries })
 }
@@ -150,16 +164,16 @@ fn get_codes(state: State<'_, SessionState>) -> Result<CodesResponse, String> {
     let now = now_unix();
 
     let should_relock = guard
-        .session
+        .state
         .as_ref()
-        .map(|s| s.should_relock(now))
+        .map(|u| u.session.should_relock(now))
         .unwrap_or(true);
     if should_relock {
         guard.invalidate();
         return Ok(CodesResponse::Locked);
     }
 
-    let session = guard.session.as_ref().unwrap();
+    let session = &guard.state.as_ref().unwrap().session;
     let codes = session.codes(now).map_err(|e| {
         eprintln!("get_codes failed: {e:#}");
         "could not generate codes".to_string()
@@ -300,6 +314,9 @@ fn user_facing(err: &StoreError) -> String {
         StoreError::Crypto(_) => "could not decrypt — wrong passphrase or corrupted store",
         StoreError::InvalidMaster(_) | StoreError::InvalidStorePayload(_) => {
             "store contents are corrupted"
+        }
+        StoreError::RecipientsMetadata(_) => {
+            "recipients metadata missing or malformed — re-run the wizard to restore"
         }
         StoreError::TomlDe(_) | StoreError::TomlSer(_) => "store contents are corrupted",
         StoreError::Atomic(_) | StoreError::Io(_) => "filesystem error",
