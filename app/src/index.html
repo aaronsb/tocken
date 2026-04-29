@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="stylesheet" href="styles.css" />
+    <title>tocken</title>
+    <script type="module" src="/main.js" defer></script>
+  </head>
+  <body>
+    <main class="panel">
+      <header>
+        <h1>tocken</h1>
+        <span class="subtitle">tray scaffold</span>
+      </header>
+      <button id="touch-btn" class="touch">Touch your YubiKey</button>
+      <p id="status" class="status">Click the button, then touch the key.</p>
+      <details>
+        <summary>details</summary>
+        <pre id="details-body"></pre>
+      </details>
+    </main>
+    <div id="ctx-menu" class="ctx-menu" role="menu">
+      <button id="ctx-copy" type="button">Copy</button>
+      <button id="ctx-select-all" type="button">Select all</button>
+    </div>
+  </body>
+</html>
