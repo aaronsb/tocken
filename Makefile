@@ -31,8 +31,8 @@ test: ## cargo test --lib
 	cd $(TAURI_DIR) && cargo test --lib
 
 .PHONY: test-hw
-test-hw: ## run #[ignore]'d tests that require a YubiKey
-	cd $(TAURI_DIR) && cargo test --lib -- --ignored
+test-hw: ## run #[ignore]'d tests that require a YubiKey (serial; touch when prompted)
+	cd $(TAURI_DIR) && cargo test --lib -- --ignored --test-threads=1
 
 .PHONY: fmt
 fmt: ## cargo fmt

@@ -71,6 +71,34 @@ header h1 {
 .status.pending {
   background: #3b3522;
   border-color: #5d4f24;
+  animation: touch-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes touch-pulse {
+  0%, 100% {
+    background: #3b3522;
+    border-color: #5d4f24;
+  }
+  50% {
+    background: #5d4f24;
+    border-color: #8c7a36;
+  }
+}
+
+.status.pending::after {
+  content: "";
+  display: inline-block;
+  width: 1.2em;
+  text-align: left;
+  animation: dots 1.4s steps(4) infinite;
+}
+
+@keyframes dots {
+  0% { content: ""; }
+  25% { content: "."; }
+  50% { content: ".."; }
+  75% { content: "..."; }
+  100% { content: ""; }
 }
 
 .status.ok {
@@ -106,6 +134,145 @@ pre {
 
 .hidden {
   display: none !important;
+}
+
+.code-state {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.code-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.code-list li {
+  background: #1a1d23;
+  border: 1px solid #2a2d36;
+  border-radius: 8px;
+  padding: 10px 12px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  cursor: pointer;
+  transition: background 0.1s, border-color 0.1s;
+}
+
+.code-list li:hover {
+  background: #20242c;
+  border-color: #3b3f4a;
+}
+
+.code-list li.flash {
+  background: #1a3a25;
+  border-color: #2d5d3a;
+}
+
+.code-list .label {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.code-list .issuer {
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.code-list .account {
+  font-size: 11px;
+  color: #888;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.code-list .digits {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 16px;
+  letter-spacing: 0.06em;
+  color: #eaeaea;
+  user-select: none;
+}
+
+.code-list .countdown {
+  width: 28px;
+  height: 4px;
+  background: #2a2d36;
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.code-list .countdown > div {
+  height: 100%;
+  background: #3b82f6;
+  width: 100%;
+  transition: width 1s linear;
+}
+
+.code-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: auto;
+}
+
+.code-footer button {
+  background: transparent;
+  color: #cccccc;
+  border: 1px solid #2a2d36;
+  border-radius: 6px;
+  padding: 6px 14px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.code-footer button:hover {
+  background: #1a1d23;
+}
+
+.reveal {
+  margin-left: auto;
+  background: transparent;
+  color: #888;
+  border: 1px solid #2a2d36;
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.reveal:hover {
+  background: #1a1d23;
+  color: #eaeaea;
+}
+
+#code-toast {
+  position: fixed;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: #1a3a25;
+  color: #a3e3c2;
+  padding: 8px 16px;
+  border-radius: 6px;
+  font-size: 12px;
+  border: 1px solid #2d5d3a;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.2s;
+  z-index: 1100;
+}
+
+#code-toast.visible {
+  opacity: 1;
 }
 
 .wizard {
