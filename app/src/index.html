@@ -23,6 +23,7 @@
         </div>
         <div class="code-pane hidden" data-state="unlocked">
           <ul id="code-list" class="code-list"></ul>
+          <p id="code-empty" class="status hidden">No accounts in this store yet. Enrollment lands in #6.</p>
         </div>
         <div class="code-pane hidden" data-state="touch-timeout">
           <p class="status err">No touch detected. Press the YubiKey within ~15 seconds of clicking unlock.</p>
@@ -30,6 +31,7 @@
         </div>
         <div class="code-pane hidden" data-state="error">
           <p id="code-error" class="status err"></p>
+          <button id="error-retry" class="touch" type="button">Retry</button>
         </div>
       </section>
 
@@ -83,9 +85,9 @@
       </div>
 
       <div class="wizard-pane hidden" data-step="done">
-        <h2>Done</h2>
-        <p>tocken is ready.</p>
-        <button id="wizard-finish" class="touch" type="button">Open</button>
+        <h2 id="wizard-done-heading">Verify setup</h2>
+        <p id="wizard-done-status">Touch your YubiKey to open your new store for the first time.</p>
+        <button id="wizard-finish" class="touch" type="button" disabled>Open</button>
       </div>
     </section>
 

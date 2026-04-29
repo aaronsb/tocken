@@ -221,18 +221,21 @@ function initWizard(root) {
 
     done: async (pane) => {
       const finish = pane.querySelector("#wizard-finish");
-      const summary = pane.querySelector("p");
+      const heading = pane.querySelector("#wizard-done-heading");
+      const status = pane.querySelector("#wizard-done-status");
       finish.disabled = true;
+      heading.textContent = "Verify setup";
 
       try {
-        const result = await invoke("finalize_init", {
+        await invoke("finalize_init", {
           passphrase: ctx.passphrase,
           yubikeyRecipient: ctx.yubikeyRecipient,
         });
-        summary.textContent =
-          `Created at ${result.store_path}. Touch your YubiKey to verify the setup works.`;
+        status.textContent =
+          "Touch your YubiKey to open your new store for the first time.";
       } catch (err) {
-        summary.textContent = `Setup failed: ${err}`;
+        heading.textContent = "Setup failed";
+        status.textContent = `${err}`;
         finish.disabled = false;
         bindFinish(finish);
         return;
@@ -245,15 +248,17 @@ function initWizard(root) {
       // skips its own unlock prompt.
       try {
         await invoke("unlock");
-        summary.textContent = "All set. Click Open to start using tocken.";
+        heading.textContent = "Setup complete";
+        status.textContent =
+          "Your store is ready. No accounts yet — enrollment lands in #6.";
         finish.disabled = false;
       } catch (err) {
+        heading.textContent = "Verification failed";
         if (err && err.kind === "TouchTimeout") {
-          summary.textContent =
-            "Verification touch didn't register. Click Open and retry from the main panel.";
+          status.textContent =
+            "No touch detected. Click Open and try again from the main panel.";
         } else {
-          summary.textContent =
-            `Verification failed (${err && err.kind ? err.kind : err}). Click Open to retry from the main panel.`;
+          status.textContent = `${err && err.kind ? err.kind : err}. Click Open to retry from the main panel.`;
         }
         finish.disabled = false;
       }
@@ -288,8 +293,10 @@ function initCodePanel(root) {
     error: root.querySelector('[data-state="error"]'),
   };
   const list = root.querySelector("#code-list");
+  const empty = root.querySelector("#code-empty");
   const errBody = root.querySelector("#code-error");
   const retry = root.querySelector("#retry-unlock");
+  const errorRetry = root.querySelector("#error-retry");
   const dismiss = root.querySelector("#dismiss");
   const revealBtn = root.querySelector("#reveal-toggle");
   const subtitle = root.querySelector("#main-subtitle");
@@ -334,6 +341,7 @@ function initCodePanel(root) {
 
   const renderCodes = (codes) => {
     list.innerHTML = "";
+    empty.classList.toggle("hidden", codes.length > 0);
     for (const c of codes) {
       const li = document.createElement("li");
       li.dataset.id = c.id;
@@ -467,6 +475,7 @@ function initCodePanel(root) {
 
   // Wire interactions
   retry.addEventListener("click", () => enterAwaiting());
+  errorRetry.addEventListener("click", () => enterAwaiting());
 
   dismiss.addEventListener("click", async () => {
     if (refreshTimer) {
