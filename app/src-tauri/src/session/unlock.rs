@@ -12,7 +12,7 @@ use age::plugin::{Identity as PluginIdentity, IdentityPluginV1};
 use age::{Decryptor, NoCallbacks};
 use serde::Serialize;
 
-use crate::store::{format, format::StoreFile, paths::StorePaths};
+use crate::store::{format, format::StoreFile, paths::StorePaths, Store, StoreError};
 
 const PLUGIN_BINARY: &str = "age-plugin-yubikey";
 
@@ -28,6 +28,14 @@ pub enum UnlockError {
     StoreUnreadable(String),
     #[error("store contents are corrupted")]
     StoreCorrupted,
+    /// Recipients metadata file (`recipients.txt`) is missing or
+    /// malformed. The encrypted content decrypted fine, but tocken
+    /// cannot reconstruct the recipient set required for any future
+    /// re-encrypt without it. Treated separately from `StoreCorrupted`
+    /// because the user-visible remediation differs ("re-run wizard"
+    /// vs "broken store, recover from backup").
+    #[error("recipients metadata: {0}")]
+    RecipientsMetadata(String),
     #[error("unexpected: {0}")]
     Other(String),
 }
@@ -43,6 +51,7 @@ pub enum UnlockErrorIpc {
     NoIdentity,
     TouchTimeout,
     StoreCorrupted,
+    RecipientsMetadata { detail: String },
     Other { detail: String },
 }
 
@@ -53,6 +62,9 @@ impl From<&UnlockError> for UnlockErrorIpc {
             UnlockError::NoIdentity => Self::NoIdentity,
             UnlockError::TouchTimeoutOrMismatch => Self::TouchTimeout,
             UnlockError::StoreCorrupted => Self::StoreCorrupted,
+            UnlockError::RecipientsMetadata(detail) => Self::RecipientsMetadata {
+                detail: detail.clone(),
+            },
             UnlockError::StoreUnreadable(detail) | UnlockError::Other(detail) => Self::Other {
                 detail: detail.clone(),
             },
@@ -60,11 +72,23 @@ impl From<&UnlockError> for UnlockErrorIpc {
     }
 }
 
-/// Decrypt `store.age` using the active YubiKey identity. Blocks
-/// until the user touches the key (typically ~15s timeout enforced by
-/// the plugin). On success, returns the parsed `StoreFile` ready to
-/// hand to `Session::new`.
-pub fn decrypt_store_with_yubikey(paths: &StorePaths) -> Result<StoreFile, UnlockError> {
+/// Decrypt `store.age` using the active YubiKey identity, then
+/// reconstruct a re-encryptable `Store` by reading `recipients.txt`
+/// (#27). Blocks until the user touches the key (~15s plugin timeout).
+///
+/// Two failure surfaces here, deliberately distinct: a YubiKey-side
+/// decryption failure (`TouchTimeoutOrMismatch`, `StoreCorrupted`) vs
+/// recipients metadata absent/malformed (`RecipientsMetadata`). The
+/// frontend routes to different remediation copy.
+pub fn decrypt_store_with_yubikey(paths: &StorePaths) -> Result<Store, UnlockError> {
+    let file = decrypt_store_file(paths)?;
+    Store::from_yubikey_unlock(paths.clone(), file).map_err(|e| match e {
+        StoreError::RecipientsMetadata(detail) => UnlockError::RecipientsMetadata(detail),
+        other => UnlockError::Other(other.to_string()),
+    })
+}
+
+fn decrypt_store_file(paths: &StorePaths) -> Result<StoreFile, UnlockError> {
     let identity_stub = read_identity_stub()?;
     let identity = PluginIdentity::from_str(&identity_stub)
         .map_err(|e| UnlockError::Other(format!("identity stub did not parse: {e}")))?;
