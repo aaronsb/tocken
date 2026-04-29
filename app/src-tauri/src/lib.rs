@@ -8,6 +8,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use age::secrecy::SecretString;
 use serde::Serialize;
 use tauri::{
+    menu::{MenuBuilder, MenuItemBuilder},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     LogicalPosition, Manager, Position, State,
 };
@@ -305,15 +306,29 @@ pub fn run() {
             quit_app
         ])
         .setup(|app| {
-            // No tray menu. libayatana-appindicator on Wayland doesn't
-            // honor show_menu_on_left_click(false) reliably — the
-            // compositor decides whether a menu pops on click. With no
-            // menu attached, left-click goes straight to the
-            // tray-icon click handler. Quit lives inside the window
-            // (footer button).
+            // libayatana-appindicator (Tauri's tray backend on Linux)
+            // is menu-centric: clicking a tray icon shows the menu, by
+            // design. Without a menu attached the icon doesn't render
+            // at all on most Wayland compositors. Compromise for v0:
+            // single-item menu with "Activate". The menu still pops on
+            // primary click, but it's a single-item menu so the user
+            // is one click away from activation. See follow-up issue
+            // for a structural fix (pure SNI / Plasmoid / etc.).
+            // Quit lives inside the window — see quit_app command +
+            // footer button — so the menu doesn't carry it.
+            let activate_item = MenuItemBuilder::with_id("activate", "Activate").build(app)?;
+            let menu = MenuBuilder::new(app).items(&[&activate_item]).build()?;
+
             let _tray = TrayIconBuilder::with_id("tocken-tray")
                 .icon(app.default_window_icon().unwrap().clone())
-                .tooltip("tocken — click to activate")
+                .tooltip("tocken")
+                .menu(&menu)
+                .show_menu_on_left_click(false)
+                .on_menu_event(|app, event| {
+                    if event.id().as_ref() == "activate" {
+                        activate_window(app);
+                    }
+                })
                 .on_tray_icon_event(|tray, event| {
                     if let TrayIconEvent::Click {
                         button: MouseButton::Left,
