@@ -1,20 +1,28 @@
 import { Button, VerticalBox, HorizontalBox, LineEdit, ScrollView } from "std-widgets.slint";
 
+// One row of the code panel. Shape mirrors `tocken_core::session::EntryCode`
+// after stringification; see `tick_codes` in src/main.rs.
+struct EntryRow {
+    id: string,
+    issuer: string,
+    account: string,
+    code: string,
+    period: int,
+    time-remaining: int,
+}
+
 export component MainWindow inherits Window {
-    title: "tocken — first run";
+    title: "tocken";
     preferred-width: 480px;
     preferred-height: 580px;
     background: #111;
 
+    // App-wide mode. 0=wizard, 1=locked, 2=unlocked.
+    in-out property <int> mode: 0;
+
+    // Wizard sub-step (only consulted when mode == 0).
     // 0=welcome, 1=passphrase, 2=confirm, 3=yubikey, 4=location, 5=done
     in-out property <int> step: 0;
-
-    // Set true at startup if master.age + store.age already exist on
-    // disk. The wizard hides itself behind a placeholder rather than
-    // letting the user click Begin and accidentally create a fresh
-    // master identity that orphans the existing store. (Stage 3 will
-    // route to the unlock + code-panel flow instead.)
-    in-out property <bool> store-already-exists: false;
 
     // passphrase pane
     in-out property <string> passphrase: "";
@@ -39,24 +47,36 @@ export component MainWindow inherits Window {
     in-out property <bool> finalize-in-progress: false;
     in-out property <string> finalize-error: "";
 
+    // unlock pane (mode = 1)
+    in-out property <bool> unlocking: false;
+    in-out property <string> unlock-error: "";
+
+    // code panel (mode = 2)
+    in-out property <[EntryRow]> entries: [];
+    in-out property <int> relock-seconds: 0;
+
     callback generate-passphrase();
     callback copy-passphrase();
     callback detect-yubikey();
     callback provision-yubikey();
     callback finalize();
+    callback unlock();
+    callback lock();
 
     VerticalBox {
         padding: 24px;
         spacing: 14px;
 
-        Text {
+        if root.mode == 0: Text {
             text: "tocken first-run setup";
             font-size: 12px;
             color: #777;
             horizontal-alignment: center;
         }
 
-        if root.step == 0 && !root.store-already-exists: VerticalBox {
+        // ---------- mode 0 / wizard ----------
+
+        if root.mode == 0 && root.step == 0: VerticalBox {
             spacing: 14px;
             alignment: center;
             Text {
@@ -83,38 +103,7 @@ export component MainWindow inherits Window {
             }
         }
 
-        if root.step == 0 && root.store-already-exists: VerticalBox {
-            spacing: 12px;
-            alignment: center;
-            Text {
-                text: "Store already exists";
-                font-size: 22px;
-                color: #d0e8ff;
-                horizontal-alignment: center;
-            }
-            Text {
-                text: "An encrypted store was found at:";
-                color: #b0b0b0;
-                font-size: 13px;
-                horizontal-alignment: center;
-            }
-            Text {
-                text: root.store-path;
-                color: #d0e8ff;
-                font-size: 11px;
-                wrap: word-wrap;
-                horizontal-alignment: center;
-            }
-            Text {
-                text: "The unlock + code-panel flow arrives in stage 3 of the rebuild. Until then, use the legacy Tauri build (`make dev`) to access existing entries, or rename the data directory aside if you want to test this wizard against a clean slate.";
-                font-size: 12px;
-                color: #888;
-                wrap: word-wrap;
-                horizontal-alignment: center;
-            }
-        }
-
-        if root.step == 1: VerticalBox {
+        if root.mode == 0 && root.step == 1: VerticalBox {
             spacing: 12px;
             Text {
                 text: "Recovery passphrase";
@@ -167,7 +156,7 @@ export component MainWindow inherits Window {
             }
         }
 
-        if root.step == 2: VerticalBox {
+        if root.mode == 0 && root.step == 2: VerticalBox {
             spacing: 12px;
             Text {
                 text: "Confirm passphrase";
@@ -218,7 +207,7 @@ export component MainWindow inherits Window {
             }
         }
 
-        if root.step == 3: VerticalBox {
+        if root.mode == 0 && root.step == 3: VerticalBox {
             spacing: 10px;
             Text {
                 text: "YubiKey";
@@ -324,7 +313,7 @@ export component MainWindow inherits Window {
             }
         }
 
-        if root.step == 4: VerticalBox {
+        if root.mode == 0 && root.step == 4: VerticalBox {
             spacing: 8px;
             Text {
                 text: "Storage location";
@@ -382,7 +371,7 @@ export component MainWindow inherits Window {
             }
         }
 
-        if root.step == 5: VerticalBox {
+        if root.mode == 0 && root.step == 5: VerticalBox {
             spacing: 12px;
             Text {
                 text: "Setup complete";
@@ -415,11 +404,148 @@ export component MainWindow inherits Window {
                     }
                 }
             }
+            Button {
+                text: "Continue";
+                primary: true;
+                clicked => {
+                    // Hand off to the unlock pane. The store was just
+                    // created — the round-trip through the YubiKey is
+                    // verified by an explicit unlock here.
+                    root.passphrase = "";
+                    root.passphrase-confirm = "";
+                    root.mode = 1;
+                }
+            }
+        }
+
+        // ---------- mode 1 / locked ----------
+
+        if root.mode == 1: VerticalBox {
+            spacing: 14px;
+            alignment: center;
             Text {
-                text: "(Code panel arrives in stage 3.)";
-                color: #555;
-                font-size: 11px;
+                text: "tocken";
+                font-size: 28px;
+                color: #f0f0f0;
                 horizontal-alignment: center;
+            }
+            Text {
+                text: root.unlocking ? "Touch your YubiKey when it blinks…" : "Touch your YubiKey to unlock.";
+                font-size: 13px;
+                color: #b0b0b0;
+                wrap: word-wrap;
+                horizontal-alignment: center;
+            }
+            if root.unlock-error != "": Text {
+                text: root.unlock-error;
+                color: #ff8080;
+                font-size: 12px;
+                wrap: word-wrap;
+                horizontal-alignment: center;
+            }
+            Rectangle { height: 8px; }
+            Button {
+                text: root.unlocking ? "Awaiting touch…" : "Unlock";
+                primary: true;
+                enabled: !root.unlocking;
+                clicked => {
+                    root.unlock-error = "";
+                    root.unlock();
+                }
+            }
+        }
+
+        // ---------- mode 2 / unlocked code panel ----------
+
+        if root.mode == 2: VerticalBox {
+            spacing: 8px;
+
+            HorizontalBox {
+                spacing: 8px;
+                Text {
+                    text: "tocken";
+                    font-size: 14px;
+                    color: #888;
+                    vertical-alignment: center;
+                }
+                Rectangle { horizontal-stretch: 1; }
+                Text {
+                    text: root.entries.length == 0 ? "" : ("re-lock " + root.relock-seconds + "s");
+                    font-size: 11px;
+                    color: #555;
+                    vertical-alignment: center;
+                }
+            }
+
+            if root.entries.length == 0: VerticalBox {
+                spacing: 6px;
+                alignment: center;
+                Rectangle { height: 40px; }
+                Text {
+                    text: "No entries yet.";
+                    font-size: 16px;
+                    color: #b0b0b0;
+                    horizontal-alignment: center;
+                }
+                Text {
+                    text: "Enrollment arrives in stage 4.";
+                    font-size: 11px;
+                    color: #555;
+                    horizontal-alignment: center;
+                }
+            }
+
+            for entry in root.entries: VerticalBox {
+                spacing: 4px;
+                padding-top: 6px;
+                padding-bottom: 6px;
+                HorizontalBox {
+                    spacing: 12px;
+                    VerticalBox {
+                        spacing: 0px;
+                        Text {
+                            text: entry.issuer;
+                            color: #f0f0f0;
+                            font-size: 13px;
+                        }
+                        Text {
+                            text: entry.account;
+                            color: #888;
+                            font-size: 10px;
+                        }
+                    }
+                    Rectangle { horizontal-stretch: 1; }
+                    Text {
+                        text: entry.code;
+                        color: #d0e8ff;
+                        font-size: 22px;
+                        vertical-alignment: center;
+                    }
+                }
+                Rectangle {
+                    height: 3px;
+                    background: #1a1a1a;
+                    border-radius: 1.5px;
+                    Rectangle {
+                        x: 0;
+                        y: 0;
+                        height: 3px;
+                        background: #4a90e2;
+                        width: parent.width * entry.time-remaining / max(entry.period, 1);
+                        border-radius: 1.5px;
+                    }
+                }
+            }
+
+            Rectangle { vertical-stretch: 1; }
+
+            HorizontalBox {
+                spacing: 12px;
+                Rectangle { horizontal-stretch: 1; }
+                Button {
+                    text: "Lock";
+                    clicked => { root.lock(); }
+                }
             }
         }
     }
