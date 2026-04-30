@@ -444,8 +444,9 @@ fn wire_enroll(ui: &MainWindow, unlocked: SharedUnlocked) {
         let weak = ui.as_weak();
         ui.global::<AppState>().on_cancel_enroll(move || {
             if let Some(ui) = weak.upgrade() {
-                clear_enroll_state(&ui);
+                // Mode flip first — see note in `wire_save_enroll`.
                 ui.global::<AppState>().set_mode(2);
+                clear_enroll_state(&ui);
             }
         });
     }
@@ -534,8 +535,17 @@ fn wire_save_enroll(ui: &MainWindow, unlocked: SharedUnlocked, force_weak: bool)
 
         match commit_form(&unlocked, form, force_weak) {
             Ok(()) => {
-                clear_enroll_state(&ui);
+                // Mode flip first — unmounts EnrollmentPane entirely.
+                // Doing it the other way around (clear then mode)
+                // mutates `enroll_source` (2 → 0) while still in
+                // mode == 3, which transiently mounts the paste-URI
+                // LineEdit. That mount fires Slint's font-size
+                // binding, which panics on
+                // `WindowItem::resolved_default_font_size().unwrap()`
+                // — the LineEdit's parent chain isn't reattached at
+                // that exact moment.
                 ui.global::<AppState>().set_mode(2);
+                clear_enroll_state(&ui);
                 tick_codes(&ui, &unlocked);
             }
             Err(EnrollError::WeakSecret { bits }) => {
@@ -761,8 +771,11 @@ fn wire_save_enroll_file(ui: &MainWindow, unlocked: SharedUnlocked) {
                     eprintln!("destroy_file failed for {source_path}: {e}");
                 }
             }
-            clear_enroll_state(&ui);
+            // Mode flip first to unmount EnrollmentPane before any
+            // per-source property mutation. See note in
+            // `wire_save_enroll`.
             ui.global::<AppState>().set_mode(2);
+            clear_enroll_state(&ui);
             tick_codes(&ui, &unlocked);
         } else if let Some(msg) = last_err {
             state.set_enroll_error(format!("Nothing added. Last error: {msg}").into());
