@@ -582,6 +582,7 @@ fn user_facing(err: &StoreError) -> String {
         StoreError::TomlDe(_) | StoreError::TomlSer(_) => "store contents are corrupted",
         StoreError::Atomic(_) | StoreError::Io(_) => "filesystem error",
         StoreError::Paths(_) => "could not resolve storage path",
+        StoreError::AlreadyExists(_) => "store already exists — refusing to overwrite",
     }
     .into()
 }

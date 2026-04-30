@@ -1,51 +1,417 @@
-import { Button, VerticalBox } from "std-widgets.slint";
+import { Button, VerticalBox, HorizontalBox, LineEdit, ScrollView } from "std-widgets.slint";
 
 export component MainWindow inherits Window {
     title: "tocken — first run";
-    preferred-width: 360px;
-    preferred-height: 480px;
+    preferred-width: 480px;
+    preferred-height: 580px;
     background: #111;
 
+    // 0=welcome, 1=passphrase, 2=confirm, 3=yubikey, 4=location, 5=done
+    in-out property <int> step: 0;
+
+    // Set true at startup if master.age + store.age already exist on
+    // disk. The wizard hides itself behind a placeholder rather than
+    // letting the user click Begin and accidentally create a fresh
+    // master identity that orphans the existing store. (Stage 3 will
+    // route to the unlock + code-panel flow instead.)
+    in-out property <bool> store-already-exists: false;
+
+    // passphrase pane
+    in-out property <string> passphrase: "";
+    in-out property <string> passphrase-confirm: "";
+    in-out property <bool> confirm-error: false;
+
+    // yubikey pane
+    in-out property <bool> yubikey-detected: false;
+    in-out property <bool> yubikey-configured: false;
+    in-out property <string> yubikey-recipient: "";
+    in-out property <string> yubikey-serial: "";
+    in-out property <string> yubikey-error: "";
+    in-out property <bool> provision-in-progress: false;
+    in-out property <string> provision-log: "";
+    in-out property <string> pin-puk-message: "";
+
+    // location / finalize
+    in-out property <string> store-path: "";
+    in-out property <string> master-path: "";
+    in-out property <string> config-path: "";
+    in-out property <bool> finalize-in-progress: false;
+    in-out property <string> finalize-error: "";
+
     callback generate-passphrase();
-    in property <string> passphrase: "";
+    callback detect-yubikey();
+    callback provision-yubikey();
+    callback finalize();
 
     VerticalBox {
         padding: 24px;
-        spacing: 16px;
-        alignment: center;
+        spacing: 14px;
 
         Text {
-            text: "tocken";
-            font-size: 28px;
-            color: #f0f0f0;
+            text: "tocken first-run setup";
+            font-size: 12px;
+            color: #777;
             horizontal-alignment: center;
         }
 
-        Text {
-            text: "TOTP wallet with hardware-key unlock.";
-            font-size: 13px;
-            color: #a0a0a0;
-            wrap: word-wrap;
-            horizontal-alignment: center;
-        }
-
-        Rectangle {
-            height: 24px;
-        }
-
-        Button {
-            text: "Generate recovery passphrase";
-            clicked => {
-                root.generate-passphrase();
+        if root.step == 0 && !root.store-already-exists: VerticalBox {
+            spacing: 14px;
+            alignment: center;
+            Text {
+                text: "Welcome";
+                font-size: 28px;
+                color: #f0f0f0;
+                horizontal-alignment: center;
+            }
+            Text {
+                text: "tocken keeps your TOTP seeds in an age-encrypted file unlocked by a YubiKey. The next steps generate a recovery passphrase, provision your key, and create the encrypted store.";
+                font-size: 13px;
+                color: #b0b0b0;
+                wrap: word-wrap;
+                horizontal-alignment: center;
+            }
+            Rectangle { height: 12px; }
+            Button {
+                text: "Begin";
+                primary: true;
+                clicked => {
+                    root.step = 1;
+                    root.generate-passphrase();
+                }
             }
         }
 
-        Text {
-            text: root.passphrase == "" ? "(no passphrase generated yet)" : root.passphrase;
-            font-size: 14px;
-            color: root.passphrase == "" ? #555 : #d0e8ff;
-            wrap: word-wrap;
-            horizontal-alignment: center;
+        if root.step == 0 && root.store-already-exists: VerticalBox {
+            spacing: 12px;
+            alignment: center;
+            Text {
+                text: "Store already exists";
+                font-size: 22px;
+                color: #d0e8ff;
+                horizontal-alignment: center;
+            }
+            Text {
+                text: "An encrypted store was found at:";
+                color: #b0b0b0;
+                font-size: 13px;
+                horizontal-alignment: center;
+            }
+            Text {
+                text: root.store-path;
+                color: #d0e8ff;
+                font-size: 11px;
+                wrap: word-wrap;
+                horizontal-alignment: center;
+            }
+            Text {
+                text: "The unlock + code-panel flow arrives in stage 3 of the rebuild. Until then, use the legacy Tauri build (`make dev`) to access existing entries, or rename the data directory aside if you want to test this wizard against a clean slate.";
+                font-size: 12px;
+                color: #888;
+                wrap: word-wrap;
+                horizontal-alignment: center;
+            }
+        }
+
+        if root.step == 1: VerticalBox {
+            spacing: 12px;
+            Text {
+                text: "Recovery passphrase";
+                font-size: 22px;
+                color: #f0f0f0;
+                horizontal-alignment: center;
+            }
+            Text {
+                text: "Write this down on paper. It is the only fallback if your YubiKey is lost.";
+                font-size: 12px;
+                color: #b0b0b0;
+                wrap: word-wrap;
+                horizontal-alignment: center;
+            }
+            Rectangle {
+                height: 80px;
+                background: #1c1c1c;
+                border-radius: 6px;
+                Text {
+                    text: root.passphrase;
+                    font-size: 18px;
+                    color: #d0e8ff;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                    wrap: word-wrap;
+                }
+            }
+            HorizontalBox {
+                spacing: 12px;
+                Button {
+                    text: "Regenerate";
+                    clicked => { root.generate-passphrase(); }
+                }
+                Button {
+                    text: "I've written it down";
+                    primary: true;
+                    clicked => {
+                        root.passphrase-confirm = "";
+                        root.confirm-error = false;
+                        root.step = 2;
+                    }
+                }
+            }
+        }
+
+        if root.step == 2: VerticalBox {
+            spacing: 12px;
+            Text {
+                text: "Confirm passphrase";
+                font-size: 22px;
+                color: #f0f0f0;
+                horizontal-alignment: center;
+            }
+            Text {
+                text: "Type the passphrase you wrote down.";
+                font-size: 12px;
+                color: #b0b0b0;
+                horizontal-alignment: center;
+            }
+            LineEdit {
+                placeholder-text: "six words separated by spaces";
+                text <=> root.passphrase-confirm;
+            }
+            if root.confirm-error: Text {
+                text: "Doesn't match. Try again.";
+                color: #ff8080;
+                font-size: 12px;
+                horizontal-alignment: center;
+            }
+            HorizontalBox {
+                spacing: 12px;
+                Button {
+                    text: "Back";
+                    clicked => { root.step = 1; }
+                }
+                Button {
+                    text: "Continue";
+                    primary: true;
+                    clicked => {
+                        if root.passphrase-confirm == root.passphrase {
+                            root.confirm-error = false;
+                            root.yubikey-detected = false;
+                            root.yubikey-configured = false;
+                            root.yubikey-recipient = "";
+                            root.yubikey-serial = "";
+                            root.yubikey-error = "";
+                            root.step = 3;
+                            root.detect-yubikey();
+                        } else {
+                            root.confirm-error = true;
+                        }
+                    }
+                }
+            }
+        }
+
+        if root.step == 3: VerticalBox {
+            spacing: 10px;
+            Text {
+                text: "YubiKey";
+                font-size: 22px;
+                color: #f0f0f0;
+                horizontal-alignment: center;
+            }
+
+            if !root.yubikey-detected && root.yubikey-error == "": Text {
+                text: "Probing age-plugin-yubikey…";
+                color: #b0b0b0;
+                font-size: 13px;
+                horizontal-alignment: center;
+            }
+
+            if root.yubikey-detected && root.yubikey-configured: VerticalBox {
+                spacing: 6px;
+                Text {
+                    text: "Detected configured key.";
+                    color: #c0e0c0;
+                    font-size: 13px;
+                    horizontal-alignment: center;
+                }
+                Text {
+                    text: "Serial: " + root.yubikey-serial;
+                    color: #888;
+                    font-size: 11px;
+                    horizontal-alignment: center;
+                }
+                Text {
+                    text: root.yubikey-recipient;
+                    color: #888;
+                    font-size: 10px;
+                    wrap: word-wrap;
+                    horizontal-alignment: center;
+                }
+            }
+
+            if root.yubikey-detected && !root.yubikey-configured && !root.provision-in-progress && root.yubikey-recipient == "": VerticalBox {
+                spacing: 8px;
+                Text {
+                    text: "No identity slot found. Provision generates a new one (touch policy: always; pin policy: never; slot 1).";
+                    color: #b0b0b0;
+                    font-size: 13px;
+                    wrap: word-wrap;
+                    horizontal-alignment: center;
+                }
+                Button {
+                    text: "Provision YubiKey";
+                    primary: true;
+                    clicked => {
+                        root.provision-log = "";
+                        root.yubikey-error = "";
+                        root.provision-yubikey();
+                    }
+                }
+            }
+
+            if root.provision-in-progress || root.provision-log != "": VerticalBox {
+                spacing: 6px;
+                Text {
+                    text: root.provision-in-progress ? "Provisioning… touch the YubiKey when it blinks." : "Provisioning complete.";
+                    color: #d0e8ff;
+                    font-size: 12px;
+                    horizontal-alignment: center;
+                }
+                Rectangle {
+                    height: 140px;
+                    background: #1a1a1a;
+                    border-radius: 4px;
+                    ScrollView {
+                        Text {
+                            text: root.provision-log;
+                            color: #a0e0a0;
+                            font-size: 10px;
+                            wrap: word-wrap;
+                        }
+                    }
+                }
+            }
+
+            if root.yubikey-error != "": Text {
+                text: root.yubikey-error;
+                color: #ff8080;
+                font-size: 12px;
+                wrap: word-wrap;
+                horizontal-alignment: center;
+            }
+
+            HorizontalBox {
+                spacing: 12px;
+                Button {
+                    text: "Back";
+                    enabled: !root.provision-in-progress;
+                    clicked => { root.step = 2; }
+                }
+                Button {
+                    text: "Continue";
+                    primary: true;
+                    enabled: root.yubikey-recipient != "" && !root.provision-in-progress;
+                    clicked => { root.step = 4; }
+                }
+            }
+        }
+
+        if root.step == 4: VerticalBox {
+            spacing: 8px;
+            Text {
+                text: "Storage location";
+                font-size: 22px;
+                color: #f0f0f0;
+                horizontal-alignment: center;
+            }
+            Text {
+                text: "Files will be created at:";
+                color: #b0b0b0;
+                font-size: 13px;
+                horizontal-alignment: center;
+            }
+            Text {
+                text: root.store-path;
+                color: #d0e8ff;
+                font-size: 11px;
+                wrap: word-wrap;
+                horizontal-alignment: center;
+            }
+            Text {
+                text: root.master-path;
+                color: #d0e8ff;
+                font-size: 11px;
+                wrap: word-wrap;
+                horizontal-alignment: center;
+            }
+            Text {
+                text: root.config-path;
+                color: #d0e8ff;
+                font-size: 11px;
+                wrap: word-wrap;
+                horizontal-alignment: center;
+            }
+            if root.finalize-error != "": Text {
+                text: root.finalize-error;
+                color: #ff8080;
+                font-size: 12px;
+                wrap: word-wrap;
+                horizontal-alignment: center;
+            }
+            HorizontalBox {
+                spacing: 12px;
+                Button {
+                    text: "Back";
+                    enabled: !root.finalize-in-progress;
+                    clicked => { root.step = 3; }
+                }
+                Button {
+                    text: root.finalize-in-progress ? "Creating store…" : "Create store";
+                    primary: true;
+                    enabled: !root.finalize-in-progress;
+                    clicked => { root.finalize(); }
+                }
+            }
+        }
+
+        if root.step == 5: VerticalBox {
+            spacing: 12px;
+            Text {
+                text: "Setup complete";
+                font-size: 22px;
+                color: #c0e0c0;
+                horizontal-alignment: center;
+            }
+            Text {
+                text: "Your encrypted store is ready.";
+                color: #b0b0b0;
+                font-size: 13px;
+                horizontal-alignment: center;
+            }
+            if root.pin-puk-message != "": VerticalBox {
+                spacing: 4px;
+                Text {
+                    text: "YubiKey provisioning notes:";
+                    color: #b0b0b0;
+                    font-size: 12px;
+                    horizontal-alignment: center;
+                }
+                Rectangle {
+                    background: #1a1a1a;
+                    border-radius: 4px;
+                    Text {
+                        text: root.pin-puk-message;
+                        color: #d0e8ff;
+                        font-size: 11px;
+                        wrap: word-wrap;
+                    }
+                }
+            }
+            Text {
+                text: "(Code panel arrives in stage 3.)";
+                color: #555;
+                font-size: 11px;
+                horizontal-alignment: center;
+            }
         }
     }
 }
