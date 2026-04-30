@@ -109,6 +109,7 @@
           <button class="touch" data-source="manual" type="button">Type it manually</button>
           <button class="touch" data-source="file" type="button">Pick a file (image or text)</button>
           <button class="touch" data-source="clipboard" type="button">Paste image from clipboard</button>
+          <button class="touch" data-source="camera" type="button">Scan with camera</button>
         </div>
         <button id="enroll-cancel" type="button">Cancel</button>
       </div>
@@ -154,6 +155,22 @@
           <button id="enroll-clip-read" class="touch" type="button">Read clipboard</button>
           <button id="enroll-clip-submit" class="touch hidden" type="button">Add selected</button>
           <button id="enroll-clip-done" class="touch hidden" type="button">Done</button>
+        </div>
+      </div>
+
+      <div class="enroll-pane hidden" data-step="camera">
+        <p id="enroll-cam-status">Click Start to open the camera.</p>
+        <p id="enroll-cam-error" class="status err hidden"></p>
+        <video id="enroll-cam-video" class="enroll-cam-video hidden" autoplay playsinline muted></video>
+        <canvas id="enroll-cam-canvas" class="hidden"></canvas>
+        <ul id="enroll-cam-rows" class="enroll-file-rows hidden"></ul>
+        <p id="enroll-cam-summary" class="status hidden"></p>
+        <div class="row">
+          <button class="touch" data-back type="button">Back</button>
+          <button id="enroll-cam-start" class="touch" type="button">Start camera</button>
+          <button id="enroll-cam-capture" class="touch hidden" type="button">Capture</button>
+          <button id="enroll-cam-submit" class="touch hidden" type="button">Add selected</button>
+          <button id="enroll-cam-done" class="touch hidden" type="button">Done</button>
         </div>
       </div>
 

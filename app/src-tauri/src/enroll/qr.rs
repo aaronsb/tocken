@@ -16,6 +16,14 @@ pub enum QrError {
     Image(#[from] image::ImageError),
     #[error("no QR codes found in image")]
     NoCodesFound,
+    /// rqrr located a QR pattern but Reed-Solomon couldn't recover
+    /// the payload — a "found it but couldn't read it" outcome,
+    /// typically capture-quality related (focus, lighting, distance,
+    /// motion blur). Distinguishing this from a hard decode error
+    /// lets the camera surface a re-try-with-better-conditions hint
+    /// instead of a generic image-failed message.
+    #[error("QR detected but could not be decoded (poor capture quality)")]
+    QualityTooLow,
     #[error("rqrr decode failed: {0}")]
     Decode(String),
 }
@@ -62,7 +70,17 @@ fn decode_grids(luma: image::GrayImage) -> Result<Vec<String>, QrError> {
     }
     let mut payloads = Vec::with_capacity(grids.len());
     for grid in grids {
-        let (_meta, content) = grid.decode().map_err(|e| QrError::Decode(e.to_string()))?;
+        let (_meta, content) = grid.decode().map_err(|e| {
+            // rqrr's DeQRError doesn't expose typed variants we can
+            // match cleanly; the Display string is stable enough to
+            // route the most common quality-related failures.
+            let msg = e.to_string();
+            if msg.contains("Too many errors to correct") || msg.contains("Format") {
+                QrError::QualityTooLow
+            } else {
+                QrError::Decode(msg)
+            }
+        })?;
         payloads.push(content);
     }
     Ok(payloads)

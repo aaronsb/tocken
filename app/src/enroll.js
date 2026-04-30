@@ -14,6 +14,7 @@ export function initEnrollPanel(root, { onCancel, onAdded }) {
   const manualPane = root.querySelector('[data-step="manual"]');
   const filePane = root.querySelector('[data-step="file"]');
   const clipPane = root.querySelector('[data-step="clipboard"]');
+  const camPane = root.querySelector('[data-step="camera"]');
 
   const uriInput = root.querySelector("#enroll-uri-input");
   const uriError = root.querySelector("#enroll-uri-error");
@@ -51,17 +52,19 @@ export function initEnrollPanel(root, { onCancel, onAdded }) {
     manual: "manual entry",
     file: "file picker",
     clipboard: "clipboard image",
+    camera: "camera scan",
   };
 
   const showStep = (key) => {
-    [sourcePane, pastePane, manualPane, filePane, clipPane].forEach((p) =>
-      p.classList.add("hidden")
+    [sourcePane, pastePane, manualPane, filePane, clipPane, camPane].forEach(
+      (p) => p.classList.add("hidden")
     );
     if (key === "source-picker") sourcePane.classList.remove("hidden");
     if (key === "paste") pastePane.classList.remove("hidden");
     if (key === "manual") manualPane.classList.remove("hidden");
     if (key === "file") filePane.classList.remove("hidden");
     if (key === "clipboard") clipPane.classList.remove("hidden");
+    if (key === "camera") camPane.classList.remove("hidden");
     stepLabel.textContent = labelMap[key] || "";
   };
 
@@ -97,6 +100,7 @@ export function initEnrollPanel(root, { onCancel, onAdded }) {
     manualForceWeak = false;
     resetFilePane();
     resetClipPane();
+    resetCamPane();
   };
 
   // Surface an EnrollError onto a paste/manual error+weak pair.
@@ -325,6 +329,8 @@ export function initEnrollPanel(root, { onCancel, onAdded }) {
     if (err.kind === "empty") return "File is empty.";
     if (err.kind === "no_codes_found")
       return "No QR codes found in this image.";
+    if (err.kind === "quality_too_low")
+      return "QR detected but couldn't be decoded — try better focus, lighting, or moving closer.";
     if (err.kind === "clipboard_empty")
       return "No image on clipboard. Copy a QR code image first.";
     if (err.kind === "image")
@@ -530,6 +536,193 @@ export function initEnrollPanel(root, { onCancel, onAdded }) {
   clipRead.addEventListener("click", readClipboardImage);
   clipSubmit.addEventListener("click", submitClipboard);
   clipDone.addEventListener("click", () => {
+    onAdded();
+  });
+
+  // ─── Camera-scan flow ─────────────────────────────────────────────
+  // getUserMedia → live <video> preview → Capture button snaps a
+  // frame to a hidden canvas → toBlob → bytes go to the same decode
+  // pipeline as file/clipboard. Manual capture (one-frame-per-click)
+  // for v1; live auto-detect via jsQR is a follow-up.
+  //
+  // WebKitGTK on Linux gates camera access through gstreamer's
+  // v4l2src (in gst-plugins-good). Without the package installed the
+  // getUserMedia call rejects; we surface a hint in the error path.
+  //
+  // The MediaStream is tied to the page lifetime via `camStream` —
+  // resetCamPane() and the back/done flows MUST stop tracks or the
+  // OS-level camera indicator stays lit.
+
+  const camStatus = root.querySelector("#enroll-cam-status");
+  const camError = root.querySelector("#enroll-cam-error");
+  const camVideo = root.querySelector("#enroll-cam-video");
+  const camCanvas = root.querySelector("#enroll-cam-canvas");
+  const camRowsList = root.querySelector("#enroll-cam-rows");
+  const camSummary = root.querySelector("#enroll-cam-summary");
+  const camStart = root.querySelector("#enroll-cam-start");
+  const camCapture = root.querySelector("#enroll-cam-capture");
+  const camSubmit = root.querySelector("#enroll-cam-submit");
+  const camDone = root.querySelector("#enroll-cam-done");
+
+  let camStream = null;
+  let camRows = [];
+
+  const showCamError = (msg) => {
+    camError.textContent = msg;
+    camError.classList.remove("hidden");
+  };
+
+  const stopCamStream = () => {
+    if (camStream) {
+      camStream.getTracks().forEach((t) => t.stop());
+      camStream = null;
+    }
+    camVideo.srcObject = null;
+  };
+
+  const resetCamPane = () => {
+    stopCamStream();
+    camRows = [];
+    camStatus.textContent = "Click Start to open the camera.";
+    camStatus.classList.remove("hidden");
+    camError.classList.add("hidden");
+    camError.textContent = "";
+    camVideo.classList.add("hidden");
+    camRowsList.classList.add("hidden");
+    camRowsList.innerHTML = "";
+    camSummary.classList.add("hidden");
+    camSummary.textContent = "";
+    camStart.classList.remove("hidden");
+    camCapture.classList.add("hidden");
+    camSubmit.classList.add("hidden");
+    camDone.classList.add("hidden");
+  };
+
+  const startCamera = async () => {
+    camError.classList.add("hidden");
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      showCamError(
+        "Camera API unavailable. On Linux this needs gst-plugins-good (v4l2src) — install it and restart the app."
+      );
+      return;
+    }
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: "environment" },
+        audio: false,
+      });
+    } catch (err) {
+      const name = err && err.name ? err.name : "";
+      if (name === "NotAllowedError")
+        showCamError("Camera permission denied.");
+      else if (name === "NotFoundError")
+        showCamError("No camera detected.");
+      else if (name === "NotReadableError")
+        showCamError(
+          "Camera is busy or unavailable. On Linux this often means gst-plugins-good (v4l2src) is missing — install it and restart the app."
+        );
+      else showCamError(`Camera error: ${err && err.message ? err.message : err}`);
+      return;
+    }
+    camStream = stream;
+    camVideo.srcObject = stream;
+    camVideo.classList.remove("hidden");
+    camStatus.textContent = "Line up the QR, then Capture.";
+    camStart.classList.add("hidden");
+    camCapture.classList.remove("hidden");
+  };
+
+  // Snap a single frame from the live <video> into the hidden
+  // <canvas>, encode as PNG, hand the bytes to the same backend
+  // pipeline the file/clipboard sources use.
+  const captureFrame = async () => {
+    camError.classList.add("hidden");
+    if (!camStream || !camVideo.videoWidth) {
+      showCamError("Camera frame not ready yet.");
+      return;
+    }
+    camCanvas.width = camVideo.videoWidth;
+    camCanvas.height = camVideo.videoHeight;
+    const ctx = camCanvas.getContext("2d");
+    ctx.drawImage(camVideo, 0, 0);
+
+    const blob = await new Promise((resolve) =>
+      camCanvas.toBlob(resolve, "image/png")
+    );
+    if (!blob) {
+      showCamError("Could not encode captured frame.");
+      return;
+    }
+    const buf = await blob.arrayBuffer();
+    const bytes = Array.from(new Uint8Array(buf));
+
+    let rows;
+    try {
+      rows = await invoke("enroll_image_bytes_preview", { bytes });
+    } catch (err) {
+      // Both no_codes_found and quality_too_low are common on a
+      // blurry / off-angle / dense capture — surface as re-try
+      // hints, not hard fails.
+      if (err && err.kind === "no_codes_found") {
+        showCamError("No QR found in that frame. Try again.");
+        return;
+      }
+      if (err && err.kind === "quality_too_low") {
+        showCamError(
+          "QR detected but couldn't be decoded — try better focus, lighting, or moving closer."
+        );
+        return;
+      }
+      showCamError(fileErrorMessage(err));
+      return;
+    }
+    if (rows.length === 0) {
+      showCamError("Frame contained no recognizable entries.");
+      return;
+    }
+    camRows = rows;
+    camStatus.textContent = `Captured ${rows.length} ${rows.length === 1 ? "entry" : "entries"}. Stop the camera and review below.`;
+    renderRowList(camRowsList, rows);
+    stopCamStream();
+    camVideo.classList.add("hidden");
+    camCapture.classList.add("hidden");
+    camSubmit.classList.remove("hidden");
+  };
+
+  const submitCamera = async () => {
+    camError.classList.add("hidden");
+    const items = collectSelectedItems(camRowsList, camRows);
+    if (items.length === 0) {
+      showCamError("Nothing selected.");
+      return;
+    }
+    let result;
+    try {
+      result = await invoke("enroll_file_commit", { items });
+    } catch (err) {
+      showCamError(errorMessageFor(err));
+      return;
+    }
+    const added = result.outcomes.filter((o) => o.added_id).length;
+    const errors = result.outcomes.filter((o) => o.error).length;
+    let summary = `Added ${added} ${added === 1 ? "entry" : "entries"}.`;
+    if (errors > 0)
+      summary += ` ${errors} ${errors === 1 ? "row" : "rows"} skipped due to errors.`;
+    camSummary.textContent = summary;
+    camSummary.classList.remove("hidden");
+    camSubmit.classList.add("hidden");
+    camRowsList
+      .querySelectorAll("input.enroll-file-row-include")
+      .forEach((cb) => (cb.disabled = true));
+    camDone.classList.remove("hidden");
+  };
+
+  camStart.addEventListener("click", startCamera);
+  camCapture.addEventListener("click", captureFrame);
+  camSubmit.addEventListener("click", submitCamera);
+  camDone.addEventListener("click", () => {
+    stopCamStream();
     onAdded();
   });
 

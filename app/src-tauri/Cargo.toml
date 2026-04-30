@@ -16,6 +16,13 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-clipboard-manager = "2"
+
+# Linux camera (#6 camera source) needs an explicit
+# WebKitGTK permission-request handler — without it getUserMedia is
+# denied silently. The crate is already in the wry dep tree; pin
+# matching version to access WebViewExt.
+[target.'cfg(target_os = "linux")'.dependencies]
+webkit2gtk = "2.0"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tempfile = "3"

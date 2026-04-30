@@ -290,6 +290,17 @@ fn enroll_file_preview(
     enroll::file::decode_file(std::path::Path::new(&path))
 }
 
+/// Decode QR(s) from raw image bytes the frontend captured (camera
+/// frame, future drag-and-drop). Same downstream as the file-picker
+/// path: encoded bytes → `qr::decode_image_bytes` → row preview.
+#[tauri::command]
+fn enroll_image_bytes_preview(
+    bytes: Vec<u8>,
+) -> Result<Vec<enroll::file::FileRowPreview>, enroll::file::FileError> {
+    let payloads = enroll::qr::decode_image_bytes(&bytes)?;
+    Ok(enroll::file::decode_payloads(payloads))
+}
+
 /// Read the system clipboard for a QR image and decode it. The
 /// browser-level `navigator.clipboard.read()` call is denied by
 /// WebKitGTK in Tauri webviews on Linux even from a user-gesture
@@ -582,6 +593,33 @@ fn activate_window(app: &tauri::AppHandle) {
     }
 }
 
+#[cfg(target_os = "linux")]
+fn install_linux_media_permissions(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
+    use tauri::Manager;
+    let window = app
+        .get_webview_window("main")
+        .ok_or("main webview missing")?;
+    window.with_webview(|webview| {
+        use webkit2gtk::{PermissionRequestExt, SettingsExt, WebViewExt};
+        let wv = webview.inner();
+        // Make sure WebKitGTK's media path is enabled. These default
+        // to true in modern WebKitGTK, but pinning here documents the
+        // dependency and protects against a settings change upstream.
+        if let Some(settings) = wv.settings() {
+            settings.set_enable_media_stream(true);
+            settings.set_media_playback_requires_user_gesture(false);
+        }
+        // Auto-grant the request. WebKitGTK fires this once per
+        // origin per session (so granting on first getUserMedia
+        // covers the rest of the run).
+        wv.connect_permission_request(|_, request| {
+            request.allow();
+            true
+        });
+    })?;
+    Ok(())
+}
+
 fn anchor_top_right(window: &tauri::WebviewWindow) -> tauri::Result<()> {
     if let Some(monitor) = window.current_monitor()? {
         let scale = monitor.scale_factor();
@@ -613,6 +651,7 @@ pub fn run() {
             enroll_uri,
             enroll_file_preview,
             enroll_clipboard_image_preview,
+            enroll_image_bytes_preview,
             enroll_file_commit,
             destroy_source_file,
             lock,
@@ -654,6 +693,16 @@ pub fn run() {
                     }
                 })
                 .build(app)?;
+
+            // WebKitGTK denies media-device permission requests by
+            // default; with no handler installed, getUserMedia
+            // resolves with NotAllowedError. Auto-grant for the main
+            // webview — local content we control, and the only
+            // current consumer is the camera-scan source which the
+            // user has already opted into via a button click.
+            #[cfg(target_os = "linux")]
+            install_linux_media_permissions(app)?;
+
             Ok(())
         })
         .run(tauri::generate_context!())
