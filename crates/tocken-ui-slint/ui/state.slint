@@ -1,0 +1,113 @@
+// Shared types + global app state.
+//
+// Slint `global` is the idiomatic way to share mutable state across
+// composed components without per-property pass-through bindings.
+// Every pane (wizard, locked, code, enrollment) reads and writes
+// `AppState`; the Rust side uses `ui.global::<AppState>()` for the
+// same getters / setters / callback wiring it would otherwise call
+// on the window.
+//
+// Anything that's truly just a render-local detail (transient
+// animation state, focus tracking) can stay on its own component;
+// state that crosses panes belongs here.
+
+// One row of the unlocked code panel. Mirrors
+// `tocken_core::session::EntryCode` after stringification; see
+// `tick_codes` in src/main.rs.
+export struct EntryRow {
+    id: string,
+    issuer: string,
+    account: string,
+    code: string,
+    digits: int,
+    period: int,
+    time-remaining: int,
+}
+
+// One decoded payload from a file-picker import. Mirrors
+// `tocken_core::enroll::file::FileRowPreview` flattened for Slint:
+// either `error` is non-empty (parse / validate failure for that
+// row) OR issuer/account/payload are populated.
+export struct FilePreviewRow {
+    issuer: string,
+    account: string,
+    weak-bits: int,
+    error: string,
+    payload: string,
+}
+
+export global AppState {
+    // App-wide mode: 0=wizard, 1=locked, 2=unlocked, 3=enrollment.
+    in-out property <int> mode: 0;
+
+    // Wizard sub-step (only consulted when mode == 0).
+    // 0=welcome, 1=passphrase, 2=confirm, 3=yubikey, 4=location, 5=done.
+    in-out property <int> step: 0;
+
+    // ---- wizard: passphrase pane ----
+    in-out property <string> passphrase: "";
+    in-out property <string> passphrase-confirm: "";
+    in-out property <bool> confirm-error: false;
+    in-out property <bool> passphrase-copied: false;
+
+    // ---- wizard: yubikey pane ----
+    in-out property <bool> yubikey-detected: false;
+    in-out property <bool> yubikey-configured: false;
+    in-out property <string> yubikey-recipient: "";
+    in-out property <string> yubikey-serial: "";
+    in-out property <string> yubikey-error: "";
+    in-out property <bool> provision-in-progress: false;
+    in-out property <string> provision-log: "";
+    in-out property <string> pin-puk-message: "";
+
+    // ---- wizard: location / finalize ----
+    in-out property <string> store-path: "";
+    in-out property <string> master-path: "";
+    in-out property <string> config-path: "";
+    in-out property <bool> finalize-in-progress: false;
+    in-out property <string> finalize-error: "";
+
+    // ---- locked pane (mode = 1) ----
+    in-out property <bool> unlocking: false;
+    in-out property <string> unlock-error: "";
+
+    // ---- code panel (mode = 2) ----
+    in-out property <[EntryRow]> entries: [];
+    in-out property <int> relock-seconds: 0;
+
+    // ---- enrollment (mode = 3) ----
+    in-out property <int> enroll-source: 0;        // 0=paste, 1=manual, 2=file
+    in-out property <string> enroll-uri: "";
+    in-out property <string> enroll-issuer: "";
+    in-out property <string> enroll-account: "";
+    in-out property <string> enroll-secret: "";
+    in-out property <string> enroll-digits: "6";
+    in-out property <string> enroll-period: "30";
+    in-out property <string> enroll-error: "";
+    in-out property <bool> enroll-weak-prompt: false;
+    in-out property <int> enroll-weak-bits: 0;
+    in-out property <bool> enroll-saving: false;
+    // file source
+    in-out property <string> enroll-file-path: "";
+    in-out property <bool> enroll-file-loading: false;
+    in-out property <[FilePreviewRow]> enroll-file-rows: [];
+    in-out property <int> enroll-file-valid: 0;
+    in-out property <int> enroll-file-weak: 0;
+    in-out property <int> enroll-file-error: 0;
+    in-out property <bool> enroll-file-force-weak: false;
+
+    // ---- callbacks ----
+    callback generate-passphrase();
+    callback copy-passphrase();
+    callback detect-yubikey();
+    callback provision-yubikey();
+    callback finalize();
+    callback unlock();
+    callback lock();
+    callback open-enroll();
+    callback cancel-enroll();
+    callback save-enroll();
+    callback save-enroll-force();
+    callback choose-enroll-file();
+    callback save-enroll-file();
+}

@@ -1,466 +1,41 @@
-import { Button, VerticalBox, HorizontalBox, LineEdit, ScrollView } from "std-widgets.slint";
+import { Button, VerticalBox, HorizontalBox } from "std-widgets.slint";
+import { AppState, EntryRow, FilePreviewRow } from "state.slint";
+import { WizardPane } from "wizard.slint";
+import { EnrollmentPane } from "enrollment.slint";
 
-// One row of the code panel. Shape mirrors `tocken_core::session::EntryCode`
-// after stringification; see `tick_codes` in src/main.rs.
-struct EntryRow {
-    id: string,
-    issuer: string,
-    account: string,
-    code: string,
-    digits: int,
-    period: int,
-    time-remaining: int,
-}
+// Re-export so `slint::include_modules!()` exposes AppState (the
+// global) and the FilePreviewRow struct to Rust. Without this,
+// `ui.global::<AppState>()` fails to compile because the Rust type
+// isn't generated — Slint only emits bindings for items the main
+// file directly uses or re-exports.
+export { AppState, FilePreviewRow }
 
-// One decoded payload from a file-picker import. Mirrors
-// `tocken_core::enroll::file::FileRowPreview` flattened for Slint:
-// either `error` is non-empty (parse / validate failure for that row)
-// OR issuer/account/payload are populated.
-struct FilePreviewRow {
-    issuer: string,
-    account: string,
-    weak-bits: int,    // 0 if not weak
-    error: string,     // empty if no error
-    payload: string,   // raw URI; Rust re-vets it on commit
-}
-
+// Top-level window. Switches on `AppState.mode` between the four
+// pane families. Wizard and Enrollment are heavy enough to live in
+// their own files (`wizard.slint`, `enrollment.slint`); locked +
+// code-panel are short enough to stay inline here.
 export component MainWindow inherits Window {
     title: "tocken";
     preferred-width: 480px;
     preferred-height: 580px;
     background: #111;
 
-    // App-wide mode. 0=wizard, 1=locked, 2=unlocked.
-    in-out property <int> mode: 0;
-
-    // Wizard sub-step (only consulted when mode == 0).
-    // 0=welcome, 1=passphrase, 2=confirm, 3=yubikey, 4=location, 5=done
-    in-out property <int> step: 0;
-
-    // passphrase pane
-    in-out property <string> passphrase: "";
-    in-out property <string> passphrase-confirm: "";
-    in-out property <bool> confirm-error: false;
-    in-out property <bool> passphrase-copied: false;
-
-    // yubikey pane
-    in-out property <bool> yubikey-detected: false;
-    in-out property <bool> yubikey-configured: false;
-    in-out property <string> yubikey-recipient: "";
-    in-out property <string> yubikey-serial: "";
-    in-out property <string> yubikey-error: "";
-    in-out property <bool> provision-in-progress: false;
-    in-out property <string> provision-log: "";
-    in-out property <string> pin-puk-message: "";
-
-    // location / finalize
-    in-out property <string> store-path: "";
-    in-out property <string> master-path: "";
-    in-out property <string> config-path: "";
-    in-out property <bool> finalize-in-progress: false;
-    in-out property <string> finalize-error: "";
-
-    // unlock pane (mode = 1)
-    in-out property <bool> unlocking: false;
-    in-out property <string> unlock-error: "";
-
-    // code panel (mode = 2)
-    in-out property <[EntryRow]> entries: [];
-    in-out property <int> relock-seconds: 0;
-
-    // enrollment (mode = 3)
-    in-out property <int> enroll-source: 0;       // 0=paste, 1=manual, 2=file
-    in-out property <string> enroll-uri: "";
-    in-out property <string> enroll-issuer: "";
-    in-out property <string> enroll-account: "";
-    in-out property <string> enroll-secret: "";
-    in-out property <string> enroll-digits: "6";
-    in-out property <string> enroll-period: "30";
-    in-out property <string> enroll-error: "";
-    in-out property <bool> enroll-weak-prompt: false;
-    in-out property <int> enroll-weak-bits: 0;
-    in-out property <bool> enroll-saving: false;
-    // file source
-    in-out property <string> enroll-file-path: "";
-    in-out property <bool> enroll-file-loading: false;
-    in-out property <[FilePreviewRow]> enroll-file-rows: [];
-    in-out property <int> enroll-file-valid: 0;
-    in-out property <int> enroll-file-weak: 0;
-    in-out property <int> enroll-file-error: 0;
-    in-out property <bool> enroll-file-force-weak: false;
-
-    callback generate-passphrase();
-    callback copy-passphrase();
-    callback detect-yubikey();
-    callback provision-yubikey();
-    callback finalize();
-    callback unlock();
-    callback lock();
-    callback open-enroll();
-    callback cancel-enroll();
-    callback save-enroll();
-    callback save-enroll-force();
-    callback choose-enroll-file();
-    callback save-enroll-file();
-
     VerticalBox {
         padding: 24px;
         spacing: 14px;
 
-        if root.mode == 0: Text {
+        if AppState.mode == 0: Text {
             text: "tocken first-run setup";
             font-size: 12px;
             color: #777;
             horizontal-alignment: center;
         }
 
-        // ---------- mode 0 / wizard ----------
-
-        if root.mode == 0 && root.step == 0: VerticalBox {
-            spacing: 14px;
-            alignment: center;
-            Text {
-                text: "Welcome";
-                font-size: 28px;
-                color: #f0f0f0;
-                horizontal-alignment: center;
-            }
-            Text {
-                text: "tocken keeps your TOTP seeds in an age-encrypted file unlocked by a YubiKey. The next steps generate a recovery passphrase, provision your key, and create the encrypted store.";
-                font-size: 13px;
-                color: #b0b0b0;
-                wrap: word-wrap;
-                horizontal-alignment: center;
-            }
-            Rectangle { height: 12px; }
-            Button {
-                text: "Begin";
-                primary: true;
-                clicked => {
-                    root.step = 1;
-                    root.generate-passphrase();
-                }
-            }
-        }
-
-        if root.mode == 0 && root.step == 1: VerticalBox {
-            spacing: 12px;
-            Text {
-                text: "Recovery passphrase";
-                font-size: 22px;
-                color: #f0f0f0;
-                horizontal-alignment: center;
-            }
-            Text {
-                text: "Write this down on paper. It is the only fallback if your YubiKey is lost.";
-                font-size: 12px;
-                color: #b0b0b0;
-                wrap: word-wrap;
-                horizontal-alignment: center;
-            }
-            Rectangle {
-                height: 80px;
-                background: #1c1c1c;
-                border-radius: 6px;
-                Text {
-                    text: root.passphrase;
-                    font-size: 18px;
-                    color: #d0e8ff;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
-                    wrap: word-wrap;
-                }
-            }
-            HorizontalBox {
-                spacing: 12px;
-                Button {
-                    text: "Regenerate";
-                    clicked => {
-                        root.passphrase-copied = false;
-                        root.generate-passphrase();
-                    }
-                }
-                Button {
-                    text: root.passphrase-copied ? "Copied ✓" : "Copy";
-                    clicked => { root.copy-passphrase(); }
-                }
-                Button {
-                    text: "I've written it down";
-                    primary: true;
-                    clicked => {
-                        root.passphrase-confirm = "";
-                        root.confirm-error = false;
-                        root.step = 2;
-                    }
-                }
-            }
-        }
-
-        if root.mode == 0 && root.step == 2: VerticalBox {
-            spacing: 12px;
-            Text {
-                text: "Confirm passphrase";
-                font-size: 22px;
-                color: #f0f0f0;
-                horizontal-alignment: center;
-            }
-            Text {
-                text: "Type the passphrase you wrote down.";
-                font-size: 12px;
-                color: #b0b0b0;
-                horizontal-alignment: center;
-            }
-            LineEdit {
-                placeholder-text: "six words separated by spaces";
-                text <=> root.passphrase-confirm;
-            }
-            if root.confirm-error: Text {
-                text: "Doesn't match. Try again.";
-                color: #ff8080;
-                font-size: 12px;
-                horizontal-alignment: center;
-            }
-            HorizontalBox {
-                spacing: 12px;
-                Button {
-                    text: "Back";
-                    clicked => { root.step = 1; }
-                }
-                Button {
-                    text: "Continue";
-                    primary: true;
-                    clicked => {
-                        if root.passphrase-confirm == root.passphrase {
-                            root.confirm-error = false;
-                            root.yubikey-detected = false;
-                            root.yubikey-configured = false;
-                            root.yubikey-recipient = "";
-                            root.yubikey-serial = "";
-                            root.yubikey-error = "";
-                            root.step = 3;
-                            root.detect-yubikey();
-                        } else {
-                            root.confirm-error = true;
-                        }
-                    }
-                }
-            }
-        }
-
-        if root.mode == 0 && root.step == 3: VerticalBox {
-            spacing: 10px;
-            Text {
-                text: "YubiKey";
-                font-size: 22px;
-                color: #f0f0f0;
-                horizontal-alignment: center;
-            }
-
-            if !root.yubikey-detected && root.yubikey-error == "": Text {
-                text: "Probing age-plugin-yubikey…";
-                color: #b0b0b0;
-                font-size: 13px;
-                horizontal-alignment: center;
-            }
-
-            if root.yubikey-detected && root.yubikey-configured: VerticalBox {
-                spacing: 6px;
-                Text {
-                    text: "Detected configured key.";
-                    color: #c0e0c0;
-                    font-size: 13px;
-                    horizontal-alignment: center;
-                }
-                Text {
-                    text: "Serial: " + root.yubikey-serial;
-                    color: #888;
-                    font-size: 11px;
-                    horizontal-alignment: center;
-                }
-                Text {
-                    text: root.yubikey-recipient;
-                    color: #888;
-                    font-size: 10px;
-                    wrap: word-wrap;
-                    horizontal-alignment: center;
-                }
-            }
-
-            if root.yubikey-detected && !root.yubikey-configured && !root.provision-in-progress && root.yubikey-recipient == "": VerticalBox {
-                spacing: 8px;
-                Text {
-                    text: "No identity slot found. Provision generates a new one (touch policy: always; pin policy: never; slot 1).";
-                    color: #b0b0b0;
-                    font-size: 13px;
-                    wrap: word-wrap;
-                    horizontal-alignment: center;
-                }
-                Button {
-                    text: "Provision YubiKey";
-                    primary: true;
-                    clicked => {
-                        root.provision-log = "";
-                        root.yubikey-error = "";
-                        root.provision-yubikey();
-                    }
-                }
-            }
-
-            if root.provision-in-progress || root.provision-log != "": VerticalBox {
-                spacing: 6px;
-                Text {
-                    text: root.provision-in-progress ? "Provisioning… touch the YubiKey when it blinks." : "Provisioning complete.";
-                    color: #d0e8ff;
-                    font-size: 12px;
-                    horizontal-alignment: center;
-                }
-                Rectangle {
-                    height: 140px;
-                    background: #1a1a1a;
-                    border-radius: 4px;
-                    ScrollView {
-                        Text {
-                            text: root.provision-log;
-                            color: #a0e0a0;
-                            font-size: 10px;
-                            wrap: word-wrap;
-                        }
-                    }
-                }
-            }
-
-            if root.yubikey-error != "": Text {
-                text: root.yubikey-error;
-                color: #ff8080;
-                font-size: 12px;
-                wrap: word-wrap;
-                horizontal-alignment: center;
-            }
-
-            HorizontalBox {
-                spacing: 12px;
-                Button {
-                    text: "Back";
-                    enabled: !root.provision-in-progress;
-                    clicked => { root.step = 2; }
-                }
-                Button {
-                    text: "Continue";
-                    primary: true;
-                    enabled: root.yubikey-recipient != "" && !root.provision-in-progress;
-                    clicked => { root.step = 4; }
-                }
-            }
-        }
-
-        if root.mode == 0 && root.step == 4: VerticalBox {
-            spacing: 8px;
-            Text {
-                text: "Storage location";
-                font-size: 22px;
-                color: #f0f0f0;
-                horizontal-alignment: center;
-            }
-            Text {
-                text: "Files will be created at:";
-                color: #b0b0b0;
-                font-size: 13px;
-                horizontal-alignment: center;
-            }
-            Text {
-                text: root.store-path;
-                color: #d0e8ff;
-                font-size: 11px;
-                wrap: word-wrap;
-                horizontal-alignment: center;
-            }
-            Text {
-                text: root.master-path;
-                color: #d0e8ff;
-                font-size: 11px;
-                wrap: word-wrap;
-                horizontal-alignment: center;
-            }
-            Text {
-                text: root.config-path;
-                color: #d0e8ff;
-                font-size: 11px;
-                wrap: word-wrap;
-                horizontal-alignment: center;
-            }
-            if root.finalize-error != "": Text {
-                text: root.finalize-error;
-                color: #ff8080;
-                font-size: 12px;
-                wrap: word-wrap;
-                horizontal-alignment: center;
-            }
-            HorizontalBox {
-                spacing: 12px;
-                Button {
-                    text: "Back";
-                    enabled: !root.finalize-in-progress;
-                    clicked => { root.step = 3; }
-                }
-                Button {
-                    text: root.finalize-in-progress ? "Creating store…" : "Create store";
-                    primary: true;
-                    enabled: !root.finalize-in-progress;
-                    clicked => { root.finalize(); }
-                }
-            }
-        }
-
-        if root.mode == 0 && root.step == 5: VerticalBox {
-            spacing: 12px;
-            Text {
-                text: "Setup complete";
-                font-size: 22px;
-                color: #c0e0c0;
-                horizontal-alignment: center;
-            }
-            Text {
-                text: "Your encrypted store is ready.";
-                color: #b0b0b0;
-                font-size: 13px;
-                horizontal-alignment: center;
-            }
-            if root.pin-puk-message != "": VerticalBox {
-                spacing: 4px;
-                Text {
-                    text: "YubiKey provisioning notes:";
-                    color: #b0b0b0;
-                    font-size: 12px;
-                    horizontal-alignment: center;
-                }
-                Rectangle {
-                    background: #1a1a1a;
-                    border-radius: 4px;
-                    Text {
-                        text: root.pin-puk-message;
-                        color: #d0e8ff;
-                        font-size: 11px;
-                        wrap: word-wrap;
-                    }
-                }
-            }
-            Button {
-                text: "Continue";
-                primary: true;
-                clicked => {
-                    // Hand off to the unlock pane. The store was just
-                    // created — the round-trip through the YubiKey is
-                    // verified by an explicit unlock here.
-                    root.passphrase = "";
-                    root.passphrase-confirm = "";
-                    root.mode = 1;
-                }
-            }
-        }
+        if AppState.mode == 0: WizardPane {}
 
         // ---------- mode 1 / locked ----------
 
-        if root.mode == 1: VerticalBox {
+        if AppState.mode == 1: VerticalBox {
             spacing: 14px;
             alignment: center;
             Text {
@@ -470,14 +45,14 @@ export component MainWindow inherits Window {
                 horizontal-alignment: center;
             }
             Text {
-                text: root.unlocking ? "Touch your YubiKey when it blinks…" : "Touch your YubiKey to unlock.";
+                text: AppState.unlocking ? "Touch your YubiKey when it blinks…" : "Touch your YubiKey to unlock.";
                 font-size: 13px;
                 color: #b0b0b0;
                 wrap: word-wrap;
                 horizontal-alignment: center;
             }
-            if root.unlock-error != "": Text {
-                text: root.unlock-error;
+            if AppState.unlock-error != "": Text {
+                text: AppState.unlock-error;
                 color: #ff8080;
                 font-size: 12px;
                 wrap: word-wrap;
@@ -485,19 +60,19 @@ export component MainWindow inherits Window {
             }
             Rectangle { height: 8px; }
             Button {
-                text: root.unlocking ? "Awaiting touch…" : "Unlock";
+                text: AppState.unlocking ? "Awaiting touch…" : "Unlock";
                 primary: true;
-                enabled: !root.unlocking;
+                enabled: !AppState.unlocking;
                 clicked => {
-                    root.unlock-error = "";
-                    root.unlock();
+                    AppState.unlock-error = "";
+                    AppState.unlock();
                 }
             }
         }
 
         // ---------- mode 2 / unlocked code panel ----------
 
-        if root.mode == 2: VerticalBox {
+        if AppState.mode == 2: VerticalBox {
             spacing: 8px;
 
             HorizontalBox {
@@ -510,14 +85,14 @@ export component MainWindow inherits Window {
                 }
                 Rectangle { horizontal-stretch: 1; }
                 Text {
-                    text: root.entries.length == 0 ? "" : ("re-lock " + root.relock-seconds + "s");
+                    text: AppState.entries.length == 0 ? "" : ("re-lock " + AppState.relock-seconds + "s");
                     font-size: 11px;
                     color: #555;
                     vertical-alignment: center;
                 }
             }
 
-            if root.entries.length == 0: VerticalBox {
+            if AppState.entries.length == 0: VerticalBox {
                 spacing: 6px;
                 alignment: center;
                 Rectangle { height: 40px; }
@@ -528,14 +103,14 @@ export component MainWindow inherits Window {
                     horizontal-alignment: center;
                 }
                 Text {
-                    text: "Enrollment arrives in stage 4.";
+                    text: "Click + Add to enroll your first TOTP.";
                     font-size: 11px;
                     color: #555;
                     horizontal-alignment: center;
                 }
             }
 
-            for entry in root.entries: VerticalBox {
+            for entry in AppState.entries: VerticalBox {
                 spacing: 4px;
                 padding-top: 6px;
                 padding-bottom: 6px;
@@ -593,279 +168,18 @@ export component MainWindow inherits Window {
                 spacing: 12px;
                 Button {
                     text: "+ Add";
-                    clicked => { root.open-enroll(); }
+                    clicked => { AppState.open-enroll(); }
                 }
                 Rectangle { horizontal-stretch: 1; }
                 Button {
                     text: "Lock";
-                    clicked => { root.lock(); }
+                    clicked => { AppState.lock(); }
                 }
             }
         }
 
         // ---------- mode 3 / enrollment ----------
 
-        if root.mode == 3 && root.enroll-weak-prompt: VerticalBox {
-            spacing: 12px;
-            alignment: center;
-            Text {
-                text: "Weak secret";
-                font-size: 22px;
-                color: #f0f0f0;
-                horizontal-alignment: center;
-            }
-            Text {
-                text: "This secret has " + root.enroll-weak-bits + " bits of entropy, less than RFC 4226's 128-bit minimum. The code will still work but is more brute-forceable than recommended.";
-                font-size: 12px;
-                color: #b0b0b0;
-                wrap: word-wrap;
-                horizontal-alignment: center;
-            }
-            HorizontalBox {
-                spacing: 12px;
-                Button {
-                    text: "Cancel";
-                    clicked => {
-                        root.enroll-weak-prompt = false;
-                    }
-                }
-                Button {
-                    text: "Use anyway";
-                    primary: true;
-                    clicked => {
-                        root.enroll-weak-prompt = false;
-                        root.save-enroll-force();
-                    }
-                }
-            }
-        }
-
-        if root.mode == 3 && !root.enroll-weak-prompt: VerticalBox {
-            spacing: 10px;
-
-            HorizontalBox {
-                spacing: 6px;
-                Text {
-                    text: "Add entry";
-                    font-size: 18px;
-                    color: #f0f0f0;
-                    vertical-alignment: center;
-                }
-                Rectangle { horizontal-stretch: 1; }
-                Button {
-                    text: "Cancel";
-                    clicked => { root.cancel-enroll(); }
-                }
-            }
-
-            HorizontalBox {
-                spacing: 6px;
-                Button {
-                    text: "Paste URI";
-                    primary: root.enroll-source == 0;
-                    clicked => {
-                        root.enroll-source = 0;
-                        root.enroll-error = "";
-                    }
-                }
-                Button {
-                    text: "Manual";
-                    primary: root.enroll-source == 1;
-                    clicked => {
-                        root.enroll-source = 1;
-                        root.enroll-error = "";
-                    }
-                }
-                Button {
-                    text: "File";
-                    primary: root.enroll-source == 2;
-                    clicked => {
-                        root.enroll-source = 2;
-                        root.enroll-error = "";
-                    }
-                }
-            }
-
-            // ---- paste ----
-
-            if root.enroll-source == 0: VerticalBox {
-                spacing: 6px;
-                Text {
-                    text: "Paste an otpauth:// URI.";
-                    font-size: 12px;
-                    color: #888;
-                }
-                LineEdit {
-                    placeholder-text: "otpauth://totp/Issuer:account?secret=…";
-                    text <=> root.enroll-uri;
-                }
-            }
-
-            // ---- manual ----
-
-            if root.enroll-source == 1: VerticalBox {
-                spacing: 6px;
-                Text {
-                    text: "Issuer";
-                    font-size: 11px;
-                    color: #888;
-                }
-                LineEdit {
-                    placeholder-text: "e.g. GitHub";
-                    text <=> root.enroll-issuer;
-                }
-                Text {
-                    text: "Account";
-                    font-size: 11px;
-                    color: #888;
-                }
-                LineEdit {
-                    placeholder-text: "e.g. alice@example.com";
-                    text <=> root.enroll-account;
-                }
-                Text {
-                    text: "Secret (base32)";
-                    font-size: 11px;
-                    color: #888;
-                }
-                LineEdit {
-                    placeholder-text: "JBSWY3DPEHPK3PXP…";
-                    text <=> root.enroll-secret;
-                }
-                HorizontalBox {
-                    spacing: 8px;
-                    VerticalBox {
-                        spacing: 2px;
-                        Text {
-                            text: "Digits (6-8)";
-                            font-size: 11px;
-                            color: #888;
-                        }
-                        LineEdit {
-                            text <=> root.enroll-digits;
-                        }
-                    }
-                    VerticalBox {
-                        spacing: 2px;
-                        Text {
-                            text: "Period (s)";
-                            font-size: 11px;
-                            color: #888;
-                        }
-                        LineEdit {
-                            text <=> root.enroll-period;
-                        }
-                    }
-                }
-                Text {
-                    text: "TOTP, SHA-1. Defaults (6 digits, 30s) match the common case.";
-                    font-size: 10px;
-                    color: #555;
-                }
-            }
-
-            // ---- file ----
-
-            if root.enroll-source == 2: VerticalBox {
-                spacing: 6px;
-                Text {
-                    text: "Pick a file containing otpauth:// URIs (one per line) or an image (PNG/JPEG) with QR codes.";
-                    font-size: 12px;
-                    color: #888;
-                    wrap: word-wrap;
-                }
-                HorizontalBox {
-                    spacing: 6px;
-                    Button {
-                        text: root.enroll-file-loading ? "Reading…" : "Choose file…";
-                        enabled: !root.enroll-file-loading;
-                        clicked => { root.choose-enroll-file(); }
-                    }
-                    Text {
-                        text: root.enroll-file-path;
-                        font-size: 10px;
-                        color: #555;
-                        vertical-alignment: center;
-                        wrap: word-wrap;
-                    }
-                }
-                if root.enroll-file-rows.length > 0: VerticalBox {
-                    spacing: 4px;
-                    Text {
-                        text: root.enroll-file-valid + " ready, " + root.enroll-file-weak + " weak, " + root.enroll-file-error + " error";
-                        font-size: 11px;
-                        color: #b0b0b0;
-                    }
-                    Rectangle {
-                        height: 160px;
-                        background: #1a1a1a;
-                        border-radius: 4px;
-                        ScrollView {
-                            VerticalBox {
-                                spacing: 2px;
-                                padding: 6px;
-                                for row in root.enroll-file-rows: HorizontalBox {
-                                    spacing: 6px;
-                                    Text {
-                                        text: row.error != "" ? "✗" : (row.weak-bits > 0 ? "⚠" : "✓");
-                                        font-size: 11px;
-                                        color: row.error != "" ? #ff8080 : (row.weak-bits > 0 ? #e0c060 : #80c080);
-                                    }
-                                    Text {
-                                        text: row.error != "" ? row.error : (row.issuer + "  " + row.account);
-                                        font-size: 10px;
-                                        color: row.error != "" ? #ff8080 : #d0d0d0;
-                                        wrap: word-wrap;
-                                        overflow: elide;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    if root.enroll-file-weak > 0: HorizontalBox {
-                        spacing: 6px;
-                        Text {
-                            text: "Include weak rows (< 128-bit secrets):";
-                            font-size: 11px;
-                            color: #b0b0b0;
-                            vertical-alignment: center;
-                        }
-                        Rectangle { horizontal-stretch: 1; }
-                        Button {
-                            text: root.enroll-file-force-weak ? "Yes ✓" : "No";
-                            clicked => {
-                                root.enroll-file-force-weak = !root.enroll-file-force-weak;
-                            }
-                        }
-                    }
-                }
-            }
-
-            if root.enroll-error != "": Text {
-                text: root.enroll-error;
-                color: #ff8080;
-                font-size: 12px;
-                wrap: word-wrap;
-            }
-
-            Rectangle { vertical-stretch: 1; }
-
-            HorizontalBox {
-                spacing: 12px;
-                Rectangle { horizontal-stretch: 1; }
-                Button {
-                    text: root.enroll-saving ? "Saving…" : "Save";
-                    primary: true;
-                    enabled: !root.enroll-saving;
-                    clicked => {
-                        if root.enroll-source == 2 {
-                            root.save-enroll-file();
-                        } else {
-                            root.save-enroll();
-                        }
-                    }
-                }
-            }
-        }
+        if AppState.mode == 3: EnrollmentPane {}
     }
 }

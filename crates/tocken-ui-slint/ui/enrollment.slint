@@ -1,0 +1,274 @@
+import { Button, VerticalBox, HorizontalBox, LineEdit, ScrollView } from "std-widgets.slint";
+import { AppState } from "state.slint";
+
+// Mode = 3 enrollment flow: source picker (paste / manual / file)
+// → form → vet → save. Weak-secret confirmation is a typed sub-mode
+// that pre-empts the form when `enroll-weak-prompt` is true.
+export component EnrollmentPane inherits VerticalBox {
+    spacing: 10px;
+
+    // ---- weak-secret confirmation ----
+
+    if AppState.enroll-weak-prompt: VerticalBox {
+        spacing: 12px;
+        alignment: center;
+        Text {
+            text: "Weak secret";
+            font-size: 22px;
+            color: #f0f0f0;
+            horizontal-alignment: center;
+        }
+        Text {
+            text: "This secret has " + AppState.enroll-weak-bits + " bits of entropy, less than RFC 4226's 128-bit minimum. The code will still work but is more brute-forceable than recommended.";
+            font-size: 12px;
+            color: #b0b0b0;
+            wrap: word-wrap;
+            horizontal-alignment: center;
+        }
+        HorizontalBox {
+            spacing: 12px;
+            Button {
+                text: "Cancel";
+                clicked => { AppState.enroll-weak-prompt = false; }
+            }
+            Button {
+                text: "Use anyway";
+                primary: true;
+                clicked => {
+                    AppState.enroll-weak-prompt = false;
+                    AppState.save-enroll-force();
+                }
+            }
+        }
+    }
+
+    // ---- source picker + form ----
+
+    if !AppState.enroll-weak-prompt: VerticalBox {
+        spacing: 10px;
+
+        HorizontalBox {
+            spacing: 6px;
+            Text {
+                text: "Add entry";
+                font-size: 18px;
+                color: #f0f0f0;
+                vertical-alignment: center;
+            }
+            Rectangle { horizontal-stretch: 1; }
+            Button {
+                text: "Cancel";
+                clicked => { AppState.cancel-enroll(); }
+            }
+        }
+
+        HorizontalBox {
+            spacing: 6px;
+            Button {
+                text: "Paste URI";
+                primary: AppState.enroll-source == 0;
+                clicked => {
+                    AppState.enroll-source = 0;
+                    AppState.enroll-error = "";
+                }
+            }
+            Button {
+                text: "Manual";
+                primary: AppState.enroll-source == 1;
+                clicked => {
+                    AppState.enroll-source = 1;
+                    AppState.enroll-error = "";
+                }
+            }
+            Button {
+                text: "File";
+                primary: AppState.enroll-source == 2;
+                clicked => {
+                    AppState.enroll-source = 2;
+                    AppState.enroll-error = "";
+                }
+            }
+        }
+
+        // ---- paste ----
+
+        if AppState.enroll-source == 0: VerticalBox {
+            spacing: 6px;
+            Text {
+                text: "Paste an otpauth:// URI.";
+                font-size: 12px;
+                color: #888;
+            }
+            LineEdit {
+                placeholder-text: "otpauth://totp/Issuer:account?secret=…";
+                text <=> AppState.enroll-uri;
+            }
+        }
+
+        // ---- manual ----
+
+        if AppState.enroll-source == 1: VerticalBox {
+            spacing: 6px;
+            Text {
+                text: "Issuer";
+                font-size: 11px;
+                color: #888;
+            }
+            LineEdit {
+                placeholder-text: "e.g. GitHub";
+                text <=> AppState.enroll-issuer;
+            }
+            Text {
+                text: "Account";
+                font-size: 11px;
+                color: #888;
+            }
+            LineEdit {
+                placeholder-text: "e.g. alice@example.com";
+                text <=> AppState.enroll-account;
+            }
+            Text {
+                text: "Secret (base32)";
+                font-size: 11px;
+                color: #888;
+            }
+            LineEdit {
+                placeholder-text: "JBSWY3DPEHPK3PXP…";
+                text <=> AppState.enroll-secret;
+            }
+            HorizontalBox {
+                spacing: 8px;
+                VerticalBox {
+                    spacing: 2px;
+                    Text {
+                        text: "Digits (6-8)";
+                        font-size: 11px;
+                        color: #888;
+                    }
+                    LineEdit {
+                        text <=> AppState.enroll-digits;
+                    }
+                }
+                VerticalBox {
+                    spacing: 2px;
+                    Text {
+                        text: "Period (s)";
+                        font-size: 11px;
+                        color: #888;
+                    }
+                    LineEdit {
+                        text <=> AppState.enroll-period;
+                    }
+                }
+            }
+            Text {
+                text: "TOTP, SHA-1. Defaults (6 digits, 30s) match the common case.";
+                font-size: 10px;
+                color: #555;
+            }
+        }
+
+        // ---- file ----
+
+        if AppState.enroll-source == 2: VerticalBox {
+            spacing: 6px;
+            Text {
+                text: "Pick a file containing otpauth:// URIs (one per line) or an image (PNG/JPEG) with QR codes.";
+                font-size: 12px;
+                color: #888;
+                wrap: word-wrap;
+            }
+            HorizontalBox {
+                spacing: 6px;
+                Button {
+                    text: AppState.enroll-file-loading ? "Reading…" : "Choose file…";
+                    enabled: !AppState.enroll-file-loading;
+                    clicked => { AppState.choose-enroll-file(); }
+                }
+                Text {
+                    text: AppState.enroll-file-path;
+                    font-size: 10px;
+                    color: #555;
+                    vertical-alignment: center;
+                    wrap: word-wrap;
+                }
+            }
+            if AppState.enroll-file-rows.length > 0: VerticalBox {
+                spacing: 4px;
+                Text {
+                    text: AppState.enroll-file-valid + " ready, " + AppState.enroll-file-weak + " weak, " + AppState.enroll-file-error + " error";
+                    font-size: 11px;
+                    color: #b0b0b0;
+                }
+                Rectangle {
+                    height: 160px;
+                    background: #1a1a1a;
+                    border-radius: 4px;
+                    ScrollView {
+                        VerticalBox {
+                            spacing: 2px;
+                            padding: 6px;
+                            for row in AppState.enroll-file-rows: HorizontalBox {
+                                spacing: 6px;
+                                Text {
+                                    text: row.error != "" ? "✗" : (row.weak-bits > 0 ? "⚠" : "✓");
+                                    font-size: 11px;
+                                    color: row.error != "" ? #ff8080 : (row.weak-bits > 0 ? #e0c060 : #80c080);
+                                }
+                                Text {
+                                    text: row.error != "" ? row.error : (row.issuer + "  " + row.account);
+                                    font-size: 10px;
+                                    color: row.error != "" ? #ff8080 : #d0d0d0;
+                                    wrap: word-wrap;
+                                    overflow: elide;
+                                }
+                            }
+                        }
+                    }
+                }
+                if AppState.enroll-file-weak > 0: HorizontalBox {
+                    spacing: 6px;
+                    Text {
+                        text: "Include weak rows (< 128-bit secrets):";
+                        font-size: 11px;
+                        color: #b0b0b0;
+                        vertical-alignment: center;
+                    }
+                    Rectangle { horizontal-stretch: 1; }
+                    Button {
+                        text: AppState.enroll-file-force-weak ? "Yes ✓" : "No";
+                        clicked => {
+                            AppState.enroll-file-force-weak = !AppState.enroll-file-force-weak;
+                        }
+                    }
+                }
+            }
+        }
+
+        if AppState.enroll-error != "": Text {
+            text: AppState.enroll-error;
+            color: #ff8080;
+            font-size: 12px;
+            wrap: word-wrap;
+        }
+
+        Rectangle { vertical-stretch: 1; }
+
+        HorizontalBox {
+            spacing: 12px;
+            Rectangle { horizontal-stretch: 1; }
+            Button {
+                text: AppState.enroll-saving ? "Saving…" : "Save";
+                primary: true;
+                enabled: !AppState.enroll-saving;
+                clicked => {
+                    if AppState.enroll-source == 2 {
+                        AppState.save-enroll-file();
+                    } else {
+                        AppState.save-enroll();
+                    }
+                }
+            }
+        }
+    }
+}

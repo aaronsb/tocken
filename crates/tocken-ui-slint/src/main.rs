@@ -6,10 +6,11 @@
 //!   wiring.
 //! - **Stage 2** first-run wizard: passphrase → confirm → YubiKey
 //!   detect → provision → location → done. Long-running calls run on
-//!   worker threads; UI updates marshal via `slint::invoke_from_event_loop`.
+//!   worker threads; UI updates marshal via
+//!   `slint::invoke_from_event_loop`.
 //! - **Stage 3** unlock + code panel: routes to the locked pane on
-//!   startup if the store exists; 1Hz Slint Timer drives codes refresh
-//!   and re-lock.
+//!   startup if the store exists; 1Hz Slint Timer drives codes
+//!   refresh and re-lock.
 //! - **Stage 4** enrollment: paste-URI / manual / file picker. Single
 //!   commit pipeline (normalize → vet → finalize → store.add_entry →
 //!   store.save → rebuild Session). Weak-secret confirmation is a
@@ -20,6 +21,13 @@
 //! `Arc<Mutex<Option<Unlocked>>>` because the unlock worker thread
 //! hands the freshly-decrypted state back to the UI thread via
 //! `invoke_from_event_loop`, whose closure must be `Send`.
+//!
+//! UI state lives in a Slint `global AppState` defined in
+//! `ui/state.slint`. Rust callers access it via
+//! `ui.global::<AppState>()` for setters / getters / `on_*` callback
+//! wiring; this keeps `main.slint` thin and lets each pane component
+//! (`wizard.slint`, `enrollment.slint`) read from the same surface
+//! without per-property pass-through bindings.
 
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -86,33 +94,36 @@ fn populate_paths_and_mode(ui: &MainWindow) {
     let Ok(paths) = StorePaths::resolve() else {
         return;
     };
-    ui.set_store_path(paths.store.display().to_string().into());
-    ui.set_master_path(paths.master.display().to_string().into());
-    ui.set_config_path(paths.config.display().to_string().into());
+    let state = ui.global::<AppState>();
+    state.set_store_path(paths.store.display().to_string().into());
+    state.set_master_path(paths.master.display().to_string().into());
+    state.set_config_path(paths.config.display().to_string().into());
     if paths.master.exists() && paths.store.exists() {
-        ui.set_mode(1);
+        state.set_mode(1);
     } else {
-        ui.set_mode(0);
+        state.set_mode(0);
     }
 }
 
 fn wire_passphrase(ui: &MainWindow) {
     let weak = ui.as_weak();
-    ui.on_generate_passphrase(move || {
+    ui.global::<AppState>().on_generate_passphrase(move || {
         let phrase = wizard::passphrase::generate(wizard::passphrase::DEFAULT_WORDS);
         if let Some(ui) = weak.upgrade() {
-            ui.set_passphrase(phrase.expose_secret().into());
+            ui.global::<AppState>()
+                .set_passphrase(phrase.expose_secret().into());
         }
     });
 }
 
 fn wire_copy_passphrase(ui: &MainWindow) {
     let weak = ui.as_weak();
-    ui.on_copy_passphrase(move || {
+    ui.global::<AppState>().on_copy_passphrase(move || {
         let Some(ui) = weak.upgrade() else {
             return;
         };
-        let phrase = ui.get_passphrase().to_string();
+        let state = ui.global::<AppState>();
+        let phrase = state.get_passphrase().to_string();
         if phrase.is_empty() {
             return;
         }
@@ -141,11 +152,11 @@ fn wire_copy_passphrase(ui: &MainWindow) {
             }
         });
 
-        ui.set_passphrase_copied(true);
+        state.set_passphrase_copied(true);
         let weak_reset = weak.clone();
         slint::Timer::single_shot(Duration::from_secs(2), move || {
             if let Some(ui) = weak_reset.upgrade() {
-                ui.set_passphrase_copied(false);
+                ui.global::<AppState>().set_passphrase_copied(false);
             }
         });
     });
@@ -153,7 +164,7 @@ fn wire_copy_passphrase(ui: &MainWindow) {
 
 fn wire_detect(ui: &MainWindow) {
     let weak = ui.as_weak();
-    ui.on_detect_yubikey(move || {
+    ui.global::<AppState>().on_detect_yubikey(move || {
         let weak = weak.clone();
         thread::spawn(move || {
             let result = wizard::yubikey::detect();
@@ -161,18 +172,19 @@ fn wire_detect(ui: &MainWindow) {
                 let Some(ui) = weak.upgrade() else {
                     return;
                 };
+                let state = ui.global::<AppState>();
                 match result {
                     Ok(detect) => {
-                        ui.set_yubikey_configured(detect.configured);
-                        ui.set_yubikey_recipient(detect.recipient.unwrap_or_default().into());
-                        ui.set_yubikey_serial(detect.serial.unwrap_or_default().into());
-                        ui.set_yubikey_error("".into());
+                        state.set_yubikey_configured(detect.configured);
+                        state.set_yubikey_recipient(detect.recipient.unwrap_or_default().into());
+                        state.set_yubikey_serial(detect.serial.unwrap_or_default().into());
+                        state.set_yubikey_error("".into());
                     }
                     Err(e) => {
-                        ui.set_yubikey_error(format!("Detect failed: {e}").into());
+                        state.set_yubikey_error(format!("Detect failed: {e}").into());
                     }
                 }
-                ui.set_yubikey_detected(true);
+                state.set_yubikey_detected(true);
             });
         });
     });
@@ -180,11 +192,12 @@ fn wire_detect(ui: &MainWindow) {
 
 fn wire_provision(ui: &MainWindow) {
     let weak = ui.as_weak();
-    ui.on_provision_yubikey(move || {
+    ui.global::<AppState>().on_provision_yubikey(move || {
         if let Some(ui) = weak.upgrade() {
-            ui.set_provision_in_progress(true);
-            ui.set_provision_log("".into());
-            ui.set_yubikey_error("".into());
+            let state = ui.global::<AppState>();
+            state.set_provision_in_progress(true);
+            state.set_provision_log("".into());
+            state.set_yubikey_error("".into());
         }
 
         let weak_lines = weak.clone();
@@ -195,10 +208,11 @@ fn wire_provision(ui: &MainWindow) {
                 let weak = weak_lines.clone();
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(ui) = weak.upgrade() {
-                        let mut log = ui.get_provision_log().to_string();
+                        let state = ui.global::<AppState>();
+                        let mut log = state.get_provision_log().to_string();
                         log.push_str(&line);
                         log.push('\n');
-                        ui.set_provision_log(log.into());
+                        state.set_provision_log(log.into());
                     }
                 });
             });
@@ -207,14 +221,15 @@ fn wire_provision(ui: &MainWindow) {
                 let Some(ui) = weak_done.upgrade() else {
                     return;
                 };
-                ui.set_provision_in_progress(false);
+                let state = ui.global::<AppState>();
+                state.set_provision_in_progress(false);
                 match result {
                     Ok(r) => {
-                        ui.set_yubikey_recipient(r.recipient.into());
-                        ui.set_pin_puk_message(r.pin_puk_message.unwrap_or_default().into());
+                        state.set_yubikey_recipient(r.recipient.into());
+                        state.set_pin_puk_message(r.pin_puk_message.unwrap_or_default().into());
                     }
                     Err(e) => {
-                        ui.set_yubikey_error(format!("Provisioning failed: {e}").into());
+                        state.set_yubikey_error(format!("Provisioning failed: {e}").into());
                     }
                 }
             });
@@ -224,15 +239,16 @@ fn wire_provision(ui: &MainWindow) {
 
 fn wire_finalize(ui: &MainWindow) {
     let weak = ui.as_weak();
-    ui.on_finalize(move || {
+    ui.global::<AppState>().on_finalize(move || {
         let Some(ui) = weak.upgrade() else {
             return;
         };
-        ui.set_finalize_in_progress(true);
-        ui.set_finalize_error("".into());
+        let state = ui.global::<AppState>();
+        state.set_finalize_in_progress(true);
+        state.set_finalize_error("".into());
 
-        let passphrase = ui.get_passphrase().to_string();
-        let recipient_str = ui.get_yubikey_recipient().to_string();
+        let passphrase = state.get_passphrase().to_string();
+        let recipient_str = state.get_yubikey_recipient().to_string();
         let weak_done = weak.clone();
 
         thread::spawn(move || {
@@ -242,10 +258,11 @@ fn wire_finalize(ui: &MainWindow) {
                 let Some(ui) = weak_done.upgrade() else {
                     return;
                 };
-                ui.set_finalize_in_progress(false);
+                let state = ui.global::<AppState>();
+                state.set_finalize_in_progress(false);
                 match outcome {
-                    Ok(()) => ui.set_step(5),
-                    Err(e) => ui.set_finalize_error(e.into()),
+                    Ok(()) => state.set_step(5),
+                    Err(e) => state.set_finalize_error(e.into()),
                 }
             });
         });
@@ -273,12 +290,13 @@ fn create_store(passphrase: &str, recipient_str: &str) -> Result<(), String> {
 
 fn wire_unlock(ui: &MainWindow, unlocked: SharedUnlocked) {
     let weak = ui.as_weak();
-    ui.on_unlock(move || {
+    ui.global::<AppState>().on_unlock(move || {
         let Some(ui) = weak.upgrade() else {
             return;
         };
-        ui.set_unlocking(true);
-        ui.set_unlock_error("".into());
+        let state = ui.global::<AppState>();
+        state.set_unlocking(true);
+        state.set_unlock_error("".into());
 
         let weak_done = weak.clone();
         let unlocked_for_done = unlocked.clone();
@@ -294,18 +312,19 @@ fn wire_unlock(ui: &MainWindow, unlocked: SharedUnlocked) {
                 let Some(ui) = weak_done.upgrade() else {
                     return;
                 };
-                ui.set_unlocking(false);
+                let state = ui.global::<AppState>();
+                state.set_unlocking(false);
                 match outcome {
                     Ok(store) => {
                         let session = Session::new(store.entries().to_vec(), now_unix());
                         *unlocked_for_done.lock().unwrap() = Some(Unlocked { store, session });
-                        ui.set_mode(2);
+                        state.set_mode(2);
                         // Render codes immediately rather than waiting
                         // for the next 1Hz tick.
                         tick_codes(&ui, &unlocked_for_done);
                     }
                     Err(msg) => {
-                        ui.set_unlock_error(msg.into());
+                        state.set_unlock_error(msg.into());
                     }
                 }
             });
@@ -315,13 +334,14 @@ fn wire_unlock(ui: &MainWindow, unlocked: SharedUnlocked) {
 
 fn wire_lock(ui: &MainWindow, unlocked: SharedUnlocked) {
     let weak = ui.as_weak();
-    ui.on_lock(move || {
+    ui.global::<AppState>().on_lock(move || {
         *unlocked.lock().unwrap() = None;
         if let Some(ui) = weak.upgrade() {
-            ui.set_mode(1);
-            ui.set_unlock_error("".into());
-            ui.set_entries(empty_entries());
-            ui.set_relock_seconds(0);
+            let state = ui.global::<AppState>();
+            state.set_mode(1);
+            state.set_unlock_error("".into());
+            state.set_entries(empty_entries());
+            state.set_relock_seconds(0);
         }
     });
 }
@@ -332,14 +352,15 @@ fn tick_codes(ui: &MainWindow, unlocked: &SharedUnlocked) {
         return;
     };
 
+    let state = ui.global::<AppState>();
     let now = now_unix();
     if u.session.should_relock(now) {
         *guard = None;
         drop(guard);
-        ui.set_mode(1);
-        ui.set_entries(empty_entries());
-        ui.set_relock_seconds(0);
-        ui.set_unlock_error("Session re-locked. Touch to unlock again.".into());
+        state.set_mode(1);
+        state.set_entries(empty_entries());
+        state.set_relock_seconds(0);
+        state.set_unlock_error("Session re-locked. Touch to unlock again.".into());
         return;
     }
 
@@ -350,8 +371,8 @@ fn tick_codes(ui: &MainWindow, unlocked: &SharedUnlocked) {
     let relock_seconds = seconds_until_relock(u.session.unlocked_at_unix(), &codes, now);
 
     let rows: Vec<EntryRow> = codes.into_iter().map(entry_row_from_code).collect();
-    ui.set_entries(ModelRc::new(VecModel::from(rows)));
-    ui.set_relock_seconds(relock_seconds as i32);
+    state.set_entries(ModelRc::new(VecModel::from(rows)));
+    state.set_relock_seconds(relock_seconds as i32);
 }
 
 fn entry_row_from_code(c: EntryCode) -> EntryRow {
@@ -412,19 +433,19 @@ fn format_unlock_error(err: &unlock::UnlockError) -> String {
 fn wire_enroll(ui: &MainWindow, unlocked: SharedUnlocked) {
     {
         let weak = ui.as_weak();
-        ui.on_open_enroll(move || {
+        ui.global::<AppState>().on_open_enroll(move || {
             if let Some(ui) = weak.upgrade() {
                 clear_enroll_state(&ui);
-                ui.set_mode(3);
+                ui.global::<AppState>().set_mode(3);
             }
         });
     }
     {
         let weak = ui.as_weak();
-        ui.on_cancel_enroll(move || {
+        ui.global::<AppState>().on_cancel_enroll(move || {
             if let Some(ui) = weak.upgrade() {
                 clear_enroll_state(&ui);
-                ui.set_mode(2);
+                ui.global::<AppState>().set_mode(2);
             }
         });
     }
@@ -435,29 +456,30 @@ fn wire_enroll(ui: &MainWindow, unlocked: SharedUnlocked) {
 }
 
 fn clear_enroll_state(ui: &MainWindow) {
-    ui.set_enroll_source(0);
-    ui.set_enroll_uri("".into());
-    ui.set_enroll_issuer("".into());
-    ui.set_enroll_account("".into());
-    ui.set_enroll_secret("".into());
-    ui.set_enroll_digits("6".into());
-    ui.set_enroll_period("30".into());
-    ui.set_enroll_error("".into());
-    ui.set_enroll_weak_prompt(false);
-    ui.set_enroll_weak_bits(0);
-    ui.set_enroll_saving(false);
-    ui.set_enroll_file_path("".into());
-    ui.set_enroll_file_loading(false);
-    ui.set_enroll_file_rows(empty_file_rows());
-    ui.set_enroll_file_valid(0);
-    ui.set_enroll_file_weak(0);
-    ui.set_enroll_file_error(0);
-    ui.set_enroll_file_force_weak(false);
+    let state = ui.global::<AppState>();
+    state.set_enroll_source(0);
+    state.set_enroll_uri("".into());
+    state.set_enroll_issuer("".into());
+    state.set_enroll_account("".into());
+    state.set_enroll_secret("".into());
+    state.set_enroll_digits("6".into());
+    state.set_enroll_period("30".into());
+    state.set_enroll_error("".into());
+    state.set_enroll_weak_prompt(false);
+    state.set_enroll_weak_bits(0);
+    state.set_enroll_saving(false);
+    state.set_enroll_file_path("".into());
+    state.set_enroll_file_loading(false);
+    state.set_enroll_file_rows(empty_file_rows());
+    state.set_enroll_file_valid(0);
+    state.set_enroll_file_weak(0);
+    state.set_enroll_file_error(0);
+    state.set_enroll_file_force_weak(false);
 }
 
 /// Wire either `on_save_enroll` (force_weak=false) or
-/// `on_save_enroll_force` (force_weak=true). Both share a body —
-/// only the flag passed to `vet_form` differs.
+/// `on_save_enroll_force` (force_weak=true). Both share a body — only
+/// the flag passed to `vet_form` differs.
 fn wire_save_enroll(ui: &MainWindow, unlocked: SharedUnlocked, force_weak: bool) {
     let weak = ui.as_weak();
     let unlocked = unlocked.clone();
@@ -465,12 +487,13 @@ fn wire_save_enroll(ui: &MainWindow, unlocked: SharedUnlocked, force_weak: bool)
         let Some(ui) = weak.upgrade() else {
             return;
         };
-        ui.set_enroll_error("".into());
-        ui.set_enroll_saving(true);
+        let state = ui.global::<AppState>();
+        state.set_enroll_error("".into());
+        state.set_enroll_saving(true);
 
-        let form_result = match ui.get_enroll_source() {
-            0 => parse_paste_form(&ui),
-            1 => Ok(build_manual_form(&ui)),
+        let form_result = match state.get_enroll_source() {
+            0 => parse_paste_form(&state),
+            1 => Ok(build_manual_form(&state)),
             other => Err(EnrollError::InvalidUri {
                 detail: format!("unknown source {other}"),
             }),
@@ -479,8 +502,8 @@ fn wire_save_enroll(ui: &MainWindow, unlocked: SharedUnlocked, force_weak: bool)
         let form = match form_result {
             Ok(f) => f,
             Err(e) => {
-                ui.set_enroll_saving(false);
-                ui.set_enroll_error(e.to_string().into());
+                state.set_enroll_saving(false);
+                state.set_enroll_error(e.to_string().into());
                 return;
             }
         };
@@ -488,29 +511,29 @@ fn wire_save_enroll(ui: &MainWindow, unlocked: SharedUnlocked, force_weak: bool)
         match commit_form(&unlocked, form, force_weak) {
             Ok(()) => {
                 clear_enroll_state(&ui);
-                ui.set_mode(2);
+                ui.global::<AppState>().set_mode(2);
                 tick_codes(&ui, &unlocked);
             }
             Err(EnrollError::WeakSecret { bits }) => {
-                ui.set_enroll_saving(false);
-                ui.set_enroll_weak_bits(bits as i32);
-                ui.set_enroll_weak_prompt(true);
+                state.set_enroll_saving(false);
+                state.set_enroll_weak_bits(bits as i32);
+                state.set_enroll_weak_prompt(true);
             }
             Err(e) => {
-                ui.set_enroll_saving(false);
-                ui.set_enroll_error(e.to_string().into());
+                state.set_enroll_saving(false);
+                state.set_enroll_error(e.to_string().into());
             }
         }
     };
     if force_weak {
-        ui.on_save_enroll_force(handler);
+        ui.global::<AppState>().on_save_enroll_force(handler);
     } else {
-        ui.on_save_enroll(handler);
+        ui.global::<AppState>().on_save_enroll(handler);
     }
 }
 
-fn parse_paste_form(ui: &MainWindow) -> Result<EnrollForm, EnrollError> {
-    let uri = ui.get_enroll_uri().to_string();
+fn parse_paste_form(state: &AppState<'_>) -> Result<EnrollForm, EnrollError> {
+    let uri = state.get_enroll_uri().to_string();
     let trimmed = uri.trim();
     if trimmed.is_empty() {
         return Err(EnrollError::InvalidUri {
@@ -527,13 +550,17 @@ fn parse_paste_form(ui: &MainWindow) -> Result<EnrollForm, EnrollError> {
 /// (`6..=8` digits, `1..=86400` period) is left to
 /// `enroll::vet_form` so the error surfaces through the same path
 /// every other invalid form takes.
-fn build_manual_form(ui: &MainWindow) -> EnrollForm {
-    let digits = ui.get_enroll_digits().trim().parse::<u8>().unwrap_or(6);
-    let period = ui.get_enroll_period().trim().parse::<u32>().unwrap_or(30);
+fn build_manual_form(state: &AppState<'_>) -> EnrollForm {
+    let digits = state.get_enroll_digits().trim().parse::<u8>().unwrap_or(6);
+    let period = state
+        .get_enroll_period()
+        .trim()
+        .parse::<u32>()
+        .unwrap_or(30);
     EnrollForm {
-        issuer: ui.get_enroll_issuer().to_string(),
-        account: ui.get_enroll_account().to_string(),
-        secret: SecretString::from(ui.get_enroll_secret().to_string()),
+        issuer: state.get_enroll_issuer().to_string(),
+        account: state.get_enroll_account().to_string(),
+        secret: SecretString::from(state.get_enroll_secret().to_string()),
         digits,
         period,
         algorithm: Algorithm::Sha1,
@@ -576,12 +603,13 @@ fn add_entry_and_save(unlocked: &SharedUnlocked, entry: Entry) -> Result<(), Enr
 
 fn wire_choose_enroll_file(ui: &MainWindow) {
     let weak = ui.as_weak();
-    ui.on_choose_enroll_file(move || {
+    ui.global::<AppState>().on_choose_enroll_file(move || {
         let Some(ui) = weak.upgrade() else {
             return;
         };
-        ui.set_enroll_file_loading(true);
-        ui.set_enroll_error("".into());
+        let state = ui.global::<AppState>();
+        state.set_enroll_file_loading(true);
+        state.set_enroll_error("".into());
 
         let weak_done = weak.clone();
         thread::spawn(move || {
@@ -602,10 +630,11 @@ fn wire_choose_enroll_file(ui: &MainWindow) {
                 let Some(ui) = weak_done.upgrade() else {
                     return;
                 };
-                ui.set_enroll_file_loading(false);
+                let state = ui.global::<AppState>();
+                state.set_enroll_file_loading(false);
                 match outcome {
                     Ok((path, rows)) => {
-                        ui.set_enroll_file_path(path.into());
+                        state.set_enroll_file_path(path.into());
                         let mut valid = 0;
                         let mut weak = 0;
                         let mut errors = 0;
@@ -631,17 +660,17 @@ fn wire_choose_enroll_file(ui: &MainWindow) {
                                 }
                             })
                             .collect();
-                        ui.set_enroll_file_rows(ModelRc::new(VecModel::from(display_rows)));
-                        ui.set_enroll_file_valid(valid);
-                        ui.set_enroll_file_weak(weak);
-                        ui.set_enroll_file_error(errors);
+                        state.set_enroll_file_rows(ModelRc::new(VecModel::from(display_rows)));
+                        state.set_enroll_file_valid(valid);
+                        state.set_enroll_file_weak(weak);
+                        state.set_enroll_file_error(errors);
                     }
                     Err(msg) => {
-                        ui.set_enroll_error(msg.into());
-                        ui.set_enroll_file_rows(empty_file_rows());
-                        ui.set_enroll_file_valid(0);
-                        ui.set_enroll_file_weak(0);
-                        ui.set_enroll_file_error(0);
+                        state.set_enroll_error(msg.into());
+                        state.set_enroll_file_rows(empty_file_rows());
+                        state.set_enroll_file_valid(0);
+                        state.set_enroll_file_weak(0);
+                        state.set_enroll_file_error(0);
                     }
                 }
             });
@@ -651,17 +680,18 @@ fn wire_choose_enroll_file(ui: &MainWindow) {
 
 fn wire_save_enroll_file(ui: &MainWindow, unlocked: SharedUnlocked) {
     let weak = ui.as_weak();
-    ui.on_save_enroll_file(move || {
+    ui.global::<AppState>().on_save_enroll_file(move || {
         let Some(ui) = weak.upgrade() else {
             return;
         };
-        ui.set_enroll_error("".into());
-        ui.set_enroll_saving(true);
+        let state = ui.global::<AppState>();
+        state.set_enroll_error("".into());
+        state.set_enroll_saving(true);
 
         // Snapshot the rows and the force-weak toggle off the UI so we
         // don't borrow the model across the commit loop.
-        let force_weak = ui.get_enroll_file_force_weak();
-        let rows_model = ui.get_enroll_file_rows();
+        let force_weak = state.get_enroll_file_force_weak();
+        let rows_model = state.get_enroll_file_rows();
         let mut payloads: Vec<(String, bool)> = Vec::new();
         for i in 0..rows_model.row_count() {
             if let Some(row) = rows_model.row_data(i) {
@@ -677,13 +707,11 @@ fn wire_save_enroll_file(ui: &MainWindow, unlocked: SharedUnlocked) {
         }
 
         let mut added = 0usize;
-        let mut skipped = 0usize;
         let mut last_err: Option<String> = None;
         for (uri, is_weak) in payloads {
             let form = match enroll::parse::parse_otpauth_uri(&uri) {
                 Ok(f) => f,
                 Err(e) => {
-                    skipped += 1;
                     last_err = Some(e.to_string());
                     continue;
                 }
@@ -692,25 +720,20 @@ fn wire_save_enroll_file(ui: &MainWindow, unlocked: SharedUnlocked) {
             match commit_form(&unlocked, form, is_weak) {
                 Ok(()) => added += 1,
                 Err(e) => {
-                    skipped += 1;
                     last_err = Some(e.to_string());
                 }
             }
         }
 
-        ui.set_enroll_saving(false);
+        state.set_enroll_saving(false);
         if added > 0 {
             clear_enroll_state(&ui);
-            ui.set_mode(2);
+            ui.global::<AppState>().set_mode(2);
             tick_codes(&ui, &unlocked);
         } else if let Some(msg) = last_err {
-            ui.set_enroll_error(format!("Nothing added. Last error: {msg}").into());
+            state.set_enroll_error(format!("Nothing added. Last error: {msg}").into());
         } else {
-            ui.set_enroll_error("Nothing to add — pick a file first.".into());
+            state.set_enroll_error("Nothing to add — pick a file first.".into());
         }
-        // skipped count is not surfaced for now; if it becomes useful
-        // we can wire a status line in stage 5+ alongside the
-        // image-source UX work.
-        let _ = skipped;
     });
 }
