@@ -316,14 +316,17 @@ export function initEnrollPanel(root, { onCancel, onAdded }) {
   };
 
   // Surface a `FileError`-shaped error onto an arbitrary status line.
-  // Image decode and IO errors are both possible from either source;
-  // file-only errors (Empty for empty plaintext) are still possible
-  // here because the type is shared.
+  // Both file and clipboard sources funnel through this; some kinds
+  // (Empty plaintext) only fire from the file path, others
+  // (ClipboardEmpty) only from the clipboard path — but since the
+  // type is shared the renderer covers both.
   const fileErrorMessage = (err) => {
     if (!err) return "Unknown error";
     if (err.kind === "empty") return "File is empty.";
     if (err.kind === "no_codes_found")
       return "No QR codes found in this image.";
+    if (err.kind === "clipboard_empty")
+      return "No image on clipboard. Copy a QR code image first.";
     if (err.kind === "image")
       return `Image decode failed: ${err.detail || "unknown"}`;
     if (err.kind === "io")

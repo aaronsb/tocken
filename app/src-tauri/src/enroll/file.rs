@@ -74,6 +74,11 @@ pub enum FileError {
     Image { detail: String },
     #[error("no QR codes found in image")]
     NoCodesFound,
+    /// Clipboard didn't carry an image at all (text, empty, etc.).
+    /// Distinct from `Image` — that's "tried to decode and failed",
+    /// which is a different user-facing message.
+    #[error("no image on clipboard")]
+    ClipboardEmpty,
 }
 
 impl From<io::Error> for FileError {
