@@ -540,18 +540,24 @@ export function initEnrollPanel(root, { onCancel, onAdded }) {
   });
 
   // ─── Camera-scan flow ─────────────────────────────────────────────
-  // getUserMedia → live <video> preview → Capture button snaps a
-  // frame to a hidden canvas → toBlob → bytes go to the same decode
-  // pipeline as file/clipboard. Manual capture (one-frame-per-click)
-  // for v1; live auto-detect via jsQR is a follow-up.
+  // getUserMedia → live <video> preview → per-frame jsQR decode in
+  // the webview → on hit, stop stream + send the decoded payload
+  // string (~hundreds of bytes) to the backend for the row preview.
   //
-  // WebKitGTK on Linux gates camera access through gstreamer's
-  // v4l2src (in gst-plugins-good). Without the package installed the
-  // getUserMedia call rejects; we surface a hint in the error path.
+  // No binary IPC: we don't ship raw image bytes to Rust. The naive
+  // approach (toBlob → Array.from(Uint8Array) → JSON over the IPC
+  // pipe) was the dominant cost on the capture-to-preview round
+  // trip. Decoding the QR in-process and sending only the payload
+  // text sidesteps that entirely.
   //
-  // The MediaStream is tied to the page lifetime via `camStream` —
-  // resetCamPane() and the back/done flows MUST stop tracks or the
-  // OS-level camera indicator stays lit.
+  // Two Linux dependencies still apply:
+  //   - WebKitGTK media-permission grant (handled in lib.rs setup)
+  //   - gstreamer v4l2src for camera capture (gst-plugins-good)
+  //
+  // The MediaStream + scan loop are tied to the page lifetime via
+  // `camStream` and `camScanReq` — resetCamPane() and back/done
+  // flows MUST stop tracks AND cancel the rAF, or the OS camera
+  // indicator stays lit and the loop keeps consuming CPU.
 
   const camStatus = root.querySelector("#enroll-cam-status");
   const camError = root.querySelector("#enroll-cam-error");
@@ -560,11 +566,12 @@ export function initEnrollPanel(root, { onCancel, onAdded }) {
   const camRowsList = root.querySelector("#enroll-cam-rows");
   const camSummary = root.querySelector("#enroll-cam-summary");
   const camStart = root.querySelector("#enroll-cam-start");
-  const camCapture = root.querySelector("#enroll-cam-capture");
+  const camStop = root.querySelector("#enroll-cam-stop");
   const camSubmit = root.querySelector("#enroll-cam-submit");
   const camDone = root.querySelector("#enroll-cam-done");
 
   let camStream = null;
+  let camScanReq = null;
   let camRows = [];
 
   const showCamError = (msg) => {
@@ -573,6 +580,10 @@ export function initEnrollPanel(root, { onCancel, onAdded }) {
   };
 
   const stopCamStream = () => {
+    if (camScanReq != null) {
+      cancelAnimationFrame(camScanReq);
+      camScanReq = null;
+    }
     if (camStream) {
       camStream.getTracks().forEach((t) => t.stop());
       camStream = null;
@@ -587,13 +598,13 @@ export function initEnrollPanel(root, { onCancel, onAdded }) {
     camStatus.classList.remove("hidden");
     camError.classList.add("hidden");
     camError.textContent = "";
-    camVideo.classList.add("hidden");
+    camCanvas.classList.add("hidden");
     camRowsList.classList.add("hidden");
     camRowsList.innerHTML = "";
     camSummary.classList.add("hidden");
     camSummary.textContent = "";
     camStart.classList.remove("hidden");
-    camCapture.classList.add("hidden");
+    camStop.classList.add("hidden");
     camSubmit.classList.add("hidden");
     camDone.classList.add("hidden");
   };
@@ -604,6 +615,10 @@ export function initEnrollPanel(root, { onCancel, onAdded }) {
       showCamError(
         "Camera API unavailable. On Linux this needs gst-plugins-good (v4l2src) — install it and restart the app."
       );
+      return;
+    }
+    if (!window.jsQR) {
+      showCamError("jsQR failed to load — check vendor/jsqr.js.");
       return;
     }
     let stream;
@@ -627,72 +642,99 @@ export function initEnrollPanel(root, { onCancel, onAdded }) {
     }
     camStream = stream;
     camVideo.srcObject = stream;
-    camVideo.classList.remove("hidden");
-    camStatus.textContent = "Line up the QR, then Capture.";
+    // The <video> stays hidden; the <canvas> is what's visible. The
+    // scan loop does drawImage every frame anyway, so the canvas is
+    // continuously updated.
+    camCanvas.classList.remove("hidden");
+    camStatus.textContent = "Looking for a QR — line up the code.";
     camStart.classList.add("hidden");
-    camCapture.classList.remove("hidden");
+    camStop.classList.remove("hidden");
+
+    // WebKitGTK doesn't reliably honor the `autoplay` attribute
+    // when srcObject changes after first paint — the LED comes on
+    // (stream acquired) but the <video> stays a black region until
+    // .play() is called explicitly. The promise rejects in some
+    // hardened webview policies; we don't want a permission failure
+    // to leave the stream hanging.
+    try {
+      await camVideo.play();
+    } catch (err) {
+      stopCamStream();
+      showCamError(`Could not start video playback: ${err && err.message ? err.message : err}`);
+      camStart.classList.remove("hidden");
+      camStop.classList.add("hidden");
+      return;
+    }
+
+    // Don't schedule scanning until the video element has frames
+    // available — `videoWidth` is 0 before `loadedmetadata`, and
+    // `getImageData` on a 0×0 canvas returns nothing useful.
+    if (camVideo.readyState < 2 /* HAVE_CURRENT_DATA */) {
+      await new Promise((resolve) => {
+        const onReady = () => {
+          camVideo.removeEventListener("loadeddata", onReady);
+          resolve();
+        };
+        camVideo.addEventListener("loadeddata", onReady);
+      });
+    }
+
+    if (!camStream) return; // user hit Stop while we were waiting
+    camScanReq = requestAnimationFrame(scanFrame);
   };
 
-  // Snap a single frame from the live <video> into the hidden
-  // <canvas>, encode as PNG, hand the bytes to the same backend
-  // pipeline the file/clipboard sources use.
-  const captureFrame = async () => {
-    camError.classList.add("hidden");
-    if (!camStream || !camVideo.videoWidth) {
-      showCamError("Camera frame not ready yet.");
+  // Per-frame decode loop. Pulls the current <video> frame into a
+  // canvas, runs jsQR over the ImageData, and on a hit hands off
+  // the decoded payload to the backend. dontInvert mirrors most
+  // real-world QR captures and skips an inversion pass jsQR does
+  // by default — meaningful CPU win on the per-frame hot path.
+  const scanFrame = async () => {
+    if (!camStream) return; // stopped between scheduling and dispatch
+    if (!camVideo.videoWidth) {
+      camScanReq = requestAnimationFrame(scanFrame);
       return;
     }
     camCanvas.width = camVideo.videoWidth;
     camCanvas.height = camVideo.videoHeight;
-    const ctx = camCanvas.getContext("2d");
+    const ctx = camCanvas.getContext("2d", { willReadFrequently: true });
     ctx.drawImage(camVideo, 0, 0);
+    const data = ctx.getImageData(0, 0, camCanvas.width, camCanvas.height);
 
-    // JPEG quality 0.85 — visually indistinguishable from raw and
-    // ~5-10× smaller than PNG. The IPC payload is a JS array of
-    // bytes (Tauri serializes invoke args as JSON), so payload size
-    // is the dominant cost on the JS-to-Rust hop. PNG encode itself
-    // also dwarfs JPEG encode at this resolution. QR detection works
-    // fine at this quality — rqrr only cares about the luma channel.
-    const blob = await new Promise((resolve) =>
-      camCanvas.toBlob(resolve, "image/jpeg", 0.85)
-    );
-    if (!blob) {
-      showCamError("Could not encode captured frame.");
+    const code = window.jsQR(data.data, data.width, data.height, {
+      inversionAttempts: "dontInvert",
+    });
+
+    if (!code) {
+      camScanReq = requestAnimationFrame(scanFrame);
       return;
     }
-    const buf = await blob.arrayBuffer();
-    const bytes = Array.from(new Uint8Array(buf));
+
+    // Got a hit. Stop scanning before the IPC roundtrip so the
+    // camera releases promptly even if the backend is slow.
+    stopCamStream();
+    camCanvas.classList.add("hidden");
+    camStop.classList.add("hidden");
+    camStatus.textContent = "QR detected. Reviewing…";
 
     let rows;
     try {
-      rows = await invoke("enroll_image_bytes_preview", { bytes });
+      rows = await invoke("enroll_payloads_preview", {
+        payloads: [code.data],
+      });
     } catch (err) {
-      // Both no_codes_found and quality_too_low are common on a
-      // blurry / off-angle / dense capture — surface as re-try
-      // hints, not hard fails.
-      if (err && err.kind === "no_codes_found") {
-        showCamError("No QR found in that frame. Try again.");
-        return;
-      }
-      if (err && err.kind === "quality_too_low") {
-        showCamError(
-          "QR detected but couldn't be decoded — try better focus, lighting, or moving closer."
-        );
-        return;
-      }
       showCamError(fileErrorMessage(err));
+      // Surface a Start button so the user can try again.
+      camStart.classList.remove("hidden");
       return;
     }
     if (rows.length === 0) {
-      showCamError("Frame contained no recognizable entries.");
+      showCamError("Decoded QR but no recognizable entry.");
+      camStart.classList.remove("hidden");
       return;
     }
     camRows = rows;
-    camStatus.textContent = `Captured ${rows.length} ${rows.length === 1 ? "entry" : "entries"}. Stop the camera and review below.`;
+    camStatus.textContent = `Captured ${rows.length} ${rows.length === 1 ? "entry" : "entries"}. Review below.`;
     renderRowList(camRowsList, rows);
-    stopCamStream();
-    camVideo.classList.add("hidden");
-    camCapture.classList.add("hidden");
     camSubmit.classList.remove("hidden");
   };
 
@@ -725,7 +767,10 @@ export function initEnrollPanel(root, { onCancel, onAdded }) {
   };
 
   camStart.addEventListener("click", startCamera);
-  camCapture.addEventListener("click", captureFrame);
+  camStop.addEventListener("click", () => {
+    stopCamStream();
+    resetCamPane();
+  });
   camSubmit.addEventListener("click", submitCamera);
   camDone.addEventListener("click", () => {
     stopCamStream();

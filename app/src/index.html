@@ -5,6 +5,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="stylesheet" href="styles.css" />
     <title>tocken</title>
+    <!-- jsQR is a UMD bundle that attaches to window.jsQR. Load
+         non-async so it's available before main.js (a module that
+         imports the camera flow) runs. -->
+    <script src="vendor/jsqr.js"></script>
     <script type="module" src="/main.js" defer></script>
   </head>
   <body>
@@ -161,14 +165,18 @@
       <div class="enroll-pane hidden" data-step="camera">
         <p id="enroll-cam-status">Click Start to open the camera.</p>
         <p id="enroll-cam-error" class="status err hidden"></p>
-        <video id="enroll-cam-video" class="enroll-cam-video hidden" autoplay playsinline muted></video>
-        <canvas id="enroll-cam-canvas" class="hidden"></canvas>
+        <!-- Video is the MediaStream source but never shown on screen
+             (WebKitGTK on Wayland + transparent window has known
+             video-compositing issues). The canvas mirrors each frame
+             via drawImage in the scan loop and is what the user sees. -->
+        <video id="enroll-cam-video" class="hidden" autoplay playsinline muted></video>
+        <canvas id="enroll-cam-canvas" class="enroll-cam-canvas hidden"></canvas>
         <ul id="enroll-cam-rows" class="enroll-file-rows hidden"></ul>
         <p id="enroll-cam-summary" class="status hidden"></p>
         <div class="row">
           <button class="touch" data-back type="button">Back</button>
           <button id="enroll-cam-start" class="touch" type="button">Start camera</button>
-          <button id="enroll-cam-capture" class="touch hidden" type="button">Capture</button>
+          <button id="enroll-cam-stop" class="touch hidden" type="button">Stop</button>
           <button id="enroll-cam-submit" class="touch hidden" type="button">Add selected</button>
           <button id="enroll-cam-done" class="touch hidden" type="button">Done</button>
         </div>

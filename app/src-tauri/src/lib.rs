@@ -301,6 +301,18 @@ fn enroll_image_bytes_preview(
     Ok(enroll::file::decode_payloads(payloads))
 }
 
+/// Wrap already-decoded QR payloads (from a JS-side decoder like
+/// jsQR running in the camera scan loop) into the same row preview
+/// shape every other source produces. Sidesteps binary-over-JSON
+/// IPC by keeping the camera frames in the webview entirely; only
+/// the small payload strings cross the boundary.
+#[tauri::command]
+fn enroll_payloads_preview(
+    payloads: Vec<String>,
+) -> Result<Vec<enroll::file::FileRowPreview>, enroll::file::FileError> {
+    Ok(enroll::file::decode_payloads(payloads))
+}
+
 /// Read the system clipboard for a QR image and decode it. The
 /// browser-level `navigator.clipboard.read()` call is denied by
 /// WebKitGTK in Tauri webviews on Linux even from a user-gesture
@@ -652,6 +664,7 @@ pub fn run() {
             enroll_file_preview,
             enroll_clipboard_image_preview,
             enroll_image_bytes_preview,
+            enroll_payloads_preview,
             enroll_file_commit,
             destroy_source_file,
             lock,

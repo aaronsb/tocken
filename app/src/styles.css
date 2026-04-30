@@ -568,12 +568,15 @@ pre {
   gap: 8px;
 }
 
-/* Camera-source live preview. The window is 360x480 (tauri.conf);
-   200px keeps room for the action row + status without scrolling. */
-.enroll-cam-video {
+/* Camera-source live preview. WebKitGTK on Wayland with a
+   transparent window can fail to composite <video> onto the
+   surface (LED on, frames decoded internally, screen black), so
+   the on-screen element is the canvas — we drawImage each frame
+   into it from the (hidden) <video> in the scan loop. */
+.enroll-cam-canvas {
   width: 100%;
   max-height: 200px;
   background: #000;
   border-radius: 4px;
-  object-fit: cover;
+  object-fit: contain;
 }
