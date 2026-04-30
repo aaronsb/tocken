@@ -13,7 +13,7 @@ path = "src/main.rs"
 tocken-core = { path = "../tocken-core" }
 slint = "1.13"
 secrecy = "0.10.3"
-arboard = "3"
+arboard = { version = "3", features = ["wayland-data-control"] }
 rfd = "0.15"
 
 [build-dependencies]
