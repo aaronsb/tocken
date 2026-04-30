@@ -61,6 +61,23 @@ pub fn decode_rgba(width: u32, height: u32, rgba: &[u8]) -> Result<Vec<String>, 
     decode_grids(luma)
 }
 
+/// Decode every QR present in raw 8-bit grayscale pixel data
+/// (row-major, top to bottom). Used by the camera source: PipeWire
+/// camera nodes typically deliver YUYV/I420, the Y plane of which is
+/// already grayscale and exactly what `rqrr` wants. Skipping the
+/// RGBA round-trip is a meaningful per-frame win at video rate.
+pub fn decode_grayscale(width: u32, height: u32, luma: &[u8]) -> Result<Vec<String>, QrError> {
+    let buf = image::GrayImage::from_raw(width, height, luma.to_vec()).ok_or_else(|| {
+        QrError::Decode(format!(
+            "grayscale buffer size {} doesn't match {}x{}",
+            luma.len(),
+            width,
+            height
+        ))
+    })?;
+    decode_grids(buf)
+}
+
 fn decode_grids(luma: image::GrayImage) -> Result<Vec<String>, QrError> {
     let mut prep = rqrr::PreparedImage::prepare(luma);
     let grids = prep.detect_grids();
@@ -189,6 +206,31 @@ mod tests {
         // from_raw returns None, and decode_rgba surfaces it as
         // QrError::Decode rather than panicking.
         let result = decode_rgba(100, 100, &[0u8; 16]);
+        assert!(matches!(result, Err(QrError::Decode(_))));
+    }
+
+    #[test]
+    fn decode_grayscale_round_trips_otpauth_uri() {
+        // Same setup as the RGBA round-trip but takes the Y plane
+        // path the camera will use (PipeWire YUYV/I420 frames hand us
+        // luma directly, no color conversion needed).
+        let payload =
+            "otpauth://totp/Example:alice@example.com?secret=JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP&issuer=Example";
+        let png = encode_to_png(payload, 6);
+        let img = image::ImageReader::new(Cursor::new(&png))
+            .with_guessed_format()
+            .unwrap()
+            .decode()
+            .unwrap();
+        let luma = img.to_luma8();
+        let (w, h) = luma.dimensions();
+        let decoded = decode_grayscale(w, h, luma.as_raw()).expect("decode");
+        assert_eq!(decoded, vec![payload.to_string()]);
+    }
+
+    #[test]
+    fn decode_grayscale_size_mismatch_errors() {
+        let result = decode_grayscale(100, 100, &[0u8; 16]);
         assert!(matches!(result, Err(QrError::Decode(_))));
     }
 }
