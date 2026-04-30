@@ -1,4 +1,4 @@
-import { Button, VerticalBox, HorizontalBox } from "std-widgets.slint";
+import { Button, VerticalBox, HorizontalBox, ScrollView } from "std-widgets.slint";
 import { AppState, EntryRow, FilePreviewRow } from "state.slint";
 import { WizardPane } from "wizard.slint";
 import { EnrollmentPane } from "enrollment.slint";
@@ -92,77 +92,86 @@ export component MainWindow inherits Window {
                 }
             }
 
-            if AppState.entries.length == 0: VerticalBox {
-                spacing: 6px;
-                alignment: center;
-                Rectangle { height: 40px; }
-                Text {
-                    text: "No entries yet.";
-                    font-size: 16px;
-                    color: #b0b0b0;
-                    horizontal-alignment: center;
-                }
-                Text {
-                    text: "Click + Add to enroll your first TOTP.";
-                    font-size: 11px;
-                    color: #555;
-                    horizontal-alignment: center;
-                }
-            }
+            // ScrollView fills the remaining vertical space, so the
+            // bottom action row stays reachable even when the entry
+            // list overflows. Empty-state lives inside the ScrollView
+            // since it's a content alternative for the same region.
+            ScrollView {
+                vertical-stretch: 1;
+                VerticalBox {
+                    spacing: 6px;
 
-            for entry in AppState.entries: VerticalBox {
-                spacing: 4px;
-                padding-top: 6px;
-                padding-bottom: 6px;
-                HorizontalBox {
-                    spacing: 12px;
-                    VerticalBox {
-                        spacing: 0px;
-                        Text {
-                            text: entry.issuer;
-                            color: #f0f0f0;
-                            font-size: 13px;
-                        }
-                        Text {
-                            text: entry.account;
-                            color: #888;
-                            font-size: 10px;
-                        }
-                    }
-                    Rectangle { horizontal-stretch: 1; }
-                    VerticalBox {
-                        spacing: 0px;
+                    if AppState.entries.length == 0: VerticalBox {
+                        spacing: 6px;
                         alignment: center;
+                        Rectangle { height: 40px; }
                         Text {
-                            text: entry.code;
-                            color: #d0e8ff;
-                            font-size: 22px;
-                            horizontal-alignment: right;
+                            text: "No entries yet.";
+                            font-size: 16px;
+                            color: #b0b0b0;
+                            horizontal-alignment: center;
                         }
                         Text {
-                            text: entry.digits + "d / " + entry.period + "s";
+                            text: "Click + Add to enroll your first TOTP.";
+                            font-size: 11px;
                             color: #555;
-                            font-size: 9px;
-                            horizontal-alignment: right;
+                            horizontal-alignment: center;
                         }
                     }
-                }
-                Rectangle {
-                    height: 3px;
-                    background: #1a1a1a;
-                    border-radius: 1.5px;
-                    Rectangle {
-                        x: 0;
-                        y: 0;
-                        height: 3px;
-                        background: #4a90e2;
-                        width: parent.width * entry.time-remaining / max(entry.period, 1);
-                        border-radius: 1.5px;
+
+                    for entry in AppState.entries: VerticalBox {
+                        spacing: 4px;
+                        padding-top: 6px;
+                        padding-bottom: 6px;
+                        HorizontalBox {
+                            spacing: 12px;
+                            VerticalBox {
+                                spacing: 0px;
+                                Text {
+                                    text: entry.issuer;
+                                    color: #f0f0f0;
+                                    font-size: 13px;
+                                }
+                                Text {
+                                    text: entry.account;
+                                    color: #888;
+                                    font-size: 10px;
+                                }
+                            }
+                            Rectangle { horizontal-stretch: 1; }
+                            VerticalBox {
+                                spacing: 0px;
+                                alignment: center;
+                                Text {
+                                    text: entry.code;
+                                    color: #d0e8ff;
+                                    font-size: 22px;
+                                    horizontal-alignment: right;
+                                }
+                                Text {
+                                    text: entry.digits + "d / " + entry.period + "s";
+                                    color: #555;
+                                    font-size: 9px;
+                                    horizontal-alignment: right;
+                                }
+                            }
+                        }
+                        Rectangle {
+                            height: 3px;
+                            background: #1a1a1a;
+                            border-radius: 1.5px;
+                            Rectangle {
+                                x: 0;
+                                y: 0;
+                                height: 3px;
+                                background: #4a90e2;
+                                width: parent.width * entry.time-remaining / max(entry.period, 1);
+                                border-radius: 1.5px;
+                            }
+                        }
                     }
                 }
             }
-
-            Rectangle { vertical-stretch: 1; }
 
             HorizontalBox {
                 spacing: 12px;
