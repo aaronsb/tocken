@@ -30,14 +30,32 @@ pub fn decode_image_bytes(image_bytes: &[u8]) -> Result<Vec<String>, QrError> {
         .with_guessed_format()
         .map_err(image::ImageError::IoError)?
         .decode()?;
-    let luma = img.into_luma8();
+    decode_grids(img.into_luma8())
+}
 
+/// Decode every QR present in raw RGBA pixel data (row-major, top to
+/// bottom — matches `tauri::image::Image::rgba()`). Used by the
+/// clipboard-image source: arboard/clipboard-manager hands us decoded
+/// pixels rather than encoded image bytes.
+pub fn decode_rgba(width: u32, height: u32, rgba: &[u8]) -> Result<Vec<String>, QrError> {
+    let buf = image::RgbaImage::from_raw(width, height, rgba.to_vec()).ok_or_else(|| {
+        QrError::Decode(format!(
+            "rgba buffer size {} doesn't match {}x{}",
+            rgba.len(),
+            width,
+            height
+        ))
+    })?;
+    let luma = image::DynamicImage::ImageRgba8(buf).into_luma8();
+    decode_grids(luma)
+}
+
+fn decode_grids(luma: image::GrayImage) -> Result<Vec<String>, QrError> {
     let mut prep = rqrr::PreparedImage::prepare(luma);
     let grids = prep.detect_grids();
     if grids.is_empty() {
         return Err(QrError::NoCodesFound);
     }
-
     let mut payloads = Vec::with_capacity(grids.len());
     for grid in grids {
         let (_meta, content) = grid.decode().map_err(|e| QrError::Decode(e.to_string()))?;

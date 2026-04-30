@@ -65,3 +65,22 @@ teardown:
   the post-commit prompt offers to overwrite-and-delete the file,
   or rm it manually after import.
 EOF
+
+# Optionally produce a QR PNG for smoke-testing the clipboard-image
+# source. qrencode is in pacman / apt / brew but not always present;
+# silently skip when missing. The PNG encodes the first strong URI;
+# clipboard tools differ by display server, so print both shapes.
+if command -v qrencode >/dev/null; then
+    QR_PATH="${OUT%.txt}.png"
+    qrencode -o "$QR_PATH" -s 8 \
+        "otpauth://totp/TestA:alice@example.com?secret=${S1}&issuer=TestA&digits=6&period=30"
+    cat <<EOF
+
+also wrote $QR_PATH (QR PNG of the TestA URI)
+
+to test the clipboard-image source, copy the PNG to clipboard:
+  Wayland:  wl-copy --type image/png < $QR_PATH
+  X11:      xclip -selection clipboard -t image/png -i $QR_PATH
+then in tocken: +Add → "Paste image from clipboard" → "Read clipboard"
+EOF
+fi

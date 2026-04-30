@@ -114,7 +114,15 @@ pub fn decode_file(path: &Path) -> Result<Vec<FileRowPreview>, FileError> {
             .collect()
     };
 
-    Ok(payloads.into_iter().map(payload_to_row).collect())
+    Ok(decode_payloads(payloads))
+}
+
+/// Wrap raw decoded payloads into `FileRowPreview`s. Shared by the
+/// file-picker path (after `decode_file`) and the clipboard-image
+/// path (after `qr::decode_image_bytes`) — same row state machine,
+/// different upstreams.
+pub fn decode_payloads(payloads: Vec<String>) -> Vec<FileRowPreview> {
+    payloads.into_iter().map(payload_to_row).collect()
 }
 
 /// Securely overwrite `path` with zeros, fsync, then unlink. Best-
