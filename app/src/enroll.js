@@ -306,7 +306,7 @@ export function initEnrollPanel(root, { onCancel, onAdded }) {
           filters: [
             {
               name: "Token sources",
-              extensions: ["png", "jpg", "jpeg", "webp", "txt", "uri", "list"],
+              extensions: ["png", "jpg", "jpeg", "txt", "uri", "list"],
             },
             { name: "All files", extensions: ["*"] },
           ],

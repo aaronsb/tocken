@@ -121,8 +121,27 @@ pub fn decode_file(path: &Path) -> Result<Vec<FileRowPreview>, FileError> {
 /// effort under modern filesystem realities — see issue #6 caveat
 /// (CoW, journals, SSD wear leveling). The user-facing prompt
 /// surfaces that limitation; this function does its part.
+///
+/// Rejects symlinks and non-regular files outright. The UI promises
+/// "overwrite and delete the source file"; following a symlink would
+/// zero the target while only unlinking the link, breaking that
+/// promise and turning the command into a write-anywhere primitive
+/// bounded only by user-writable files.
 pub fn destroy_file(path: &Path) -> io::Result<()> {
-    let metadata = fs::metadata(path)?;
+    let metadata = fs::symlink_metadata(path)?;
+    let ft = metadata.file_type();
+    if ft.is_symlink() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "destroy refused: source is a symlink",
+        ));
+    }
+    if !ft.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "destroy refused: source is not a regular file",
+        ));
+    }
     let size = metadata.len();
 
     let mut f = fs::OpenOptions::new().write(true).open(path)?;
@@ -141,9 +160,14 @@ pub fn destroy_file(path: &Path) -> io::Result<()> {
 }
 
 fn looks_like_image(path: &Path, bytes: &[u8]) -> bool {
+    // Image formats here must stay aligned with the `image` crate's
+    // enabled features in Cargo.toml (currently png + jpeg) and the
+    // dialog filter in enroll.js. Adding a format means turning on
+    // its `image` feature, otherwise a pass through this gate fails
+    // at decode.
     if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
         let lower = ext.to_ascii_lowercase();
-        if matches!(lower.as_str(), "png" | "jpg" | "jpeg" | "webp" | "gif") {
+        if matches!(lower.as_str(), "png" | "jpg" | "jpeg") {
             return true;
         }
         if matches!(lower.as_str(), "txt" | "uri" | "list") {
@@ -287,5 +311,30 @@ mod tests {
 
         destroy_file(&path).expect("destroy");
         assert!(!path.exists(), "file removed after destroy");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn destroy_file_refuses_symlink() {
+        // Regression: a symlink-followed destroy would zero the target
+        // and only unlink the link, breaking the UI's "delete the
+        // source file" promise and giving a write-anywhere primitive
+        // bounded only by user-writable files.
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("target");
+        let link = dir.path().join("link");
+
+        fs::write(&target, b"do not zero me").unwrap();
+        symlink(&target, &link).unwrap();
+
+        let err = destroy_file(&link).expect_err("must reject symlink");
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+
+        // The link is still there, the target is intact.
+        assert!(link.exists());
+        let preserved = fs::read(&target).unwrap();
+        assert_eq!(preserved, b"do not zero me");
     }
 }

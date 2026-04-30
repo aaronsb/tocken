@@ -231,12 +231,17 @@ fn enroll_with_form(
     let mut guard = state.lock().unwrap();
     let unlocked = guard.state.as_mut().ok_or(enroll::EnrollError::Locked)?;
     unlocked.store.add_entry(entry);
-    unlocked.store.save().map_err(|e| {
+    if let Err(e) = unlocked.store.save() {
+        // Roll back the in-memory mutation so a transient ENOSPC etc.
+        // doesn't leave the Store diverged from disk. The next save
+        // would otherwise re-attempt the orphaned entry silently, and
+        // a re-lock would discard it without warning.
+        unlocked.store.remove_entry(&entry_id);
         eprintln!("enroll: save failed: {e:#}");
-        enroll::EnrollError::SaveFailed {
+        return Err(enroll::EnrollError::SaveFailed {
             detail: e.to_string(),
-        }
-    })?;
+        });
+    }
 
     let unlocked_at = unlocked.session.unlocked_at_unix();
     unlocked.session = Session::new(unlocked.store.entries().to_vec(), unlocked_at);
@@ -342,15 +347,23 @@ fn enroll_file_commit(
     }
 
     if !planned.is_empty() {
+        let mut added_ids: Vec<String> = Vec::with_capacity(planned.len());
         for entry in planned {
+            added_ids.push(entry.id.clone());
             unlocked.store.add_entry(entry);
         }
-        unlocked.store.save().map_err(|e| {
-            eprintln!("enroll_file: save failed: {e:#}");
-            enroll::EnrollError::SaveFailed {
-                detail: e.to_string(),
+        if let Err(e) = unlocked.store.save() {
+            // Roll back every entry we just added so the in-memory
+            // Store stays consistent with disk on save failure. See
+            // the matching rollback in enroll_with_form.
+            for id in &added_ids {
+                unlocked.store.remove_entry(id);
             }
-        })?;
+            eprintln!("enroll_file: save failed: {e:#}");
+            return Err(enroll::EnrollError::SaveFailed {
+                detail: e.to_string(),
+            });
+        }
         let unlocked_at = unlocked.session.unlocked_at_unix();
         unlocked.session = Session::new(unlocked.store.entries().to_vec(), unlocked_at);
     }
