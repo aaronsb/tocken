@@ -193,6 +193,13 @@ export component EnrollmentPane inherits VerticalBox {
                     wrap: word-wrap;
                 }
             }
+            // Counter + list shown only after the user picks a file.
+            // Slint's eager binding evaluation panics on a CheckBox
+            // nested 3+ levels deep in `if` conditionals (could not
+            // resolve Window default font-size at startup), so the
+            // destroy-source CheckBox lives one level up — inside
+            // `if source == 2` but outside `if rows.length > 0` — and
+            // simply disables itself when there's nothing to delete.
             if AppState.enroll-file-rows.length > 0: VerticalBox {
                 spacing: 6px;
                 Text {
@@ -239,10 +246,11 @@ export component EnrollmentPane inherits VerticalBox {
                         }
                     }
                 }
-                CheckBox {
-                    text: "⚠ Delete source file after import (zero-fill + unlink — best-effort)";
-                    checked <=> AppState.enroll-destroy-source;
-                }
+            }
+            CheckBox {
+                text: "⚠ Delete source file after import (zero-fill + unlink — best-effort)";
+                checked <=> AppState.enroll-destroy-source;
+                enabled: AppState.enroll-file-rows.length > 0;
             }
         }
 
