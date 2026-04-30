@@ -108,6 +108,7 @@
           <button class="touch" data-source="paste" type="button">Paste otpauth:// URI</button>
           <button class="touch" data-source="manual" type="button">Type it manually</button>
           <button class="touch" data-source="file" type="button">Pick a file (image or text)</button>
+          <button class="touch" data-source="clipboard" type="button">Paste image from clipboard</button>
         </div>
         <button id="enroll-cancel" type="button">Cancel</button>
       </div>
@@ -140,6 +141,19 @@
           <button id="enroll-file-pick" class="touch" type="button">Pick a file</button>
           <button id="enroll-file-submit" class="touch hidden" type="button">Add selected</button>
           <button id="enroll-file-done" class="touch hidden" type="button">Done</button>
+        </div>
+      </div>
+
+      <div class="enroll-pane hidden" data-step="clipboard">
+        <p id="enroll-clip-status">Copy a QR code image to your clipboard, then click Read.</p>
+        <p id="enroll-clip-error" class="status err hidden"></p>
+        <ul id="enroll-clip-rows" class="enroll-file-rows hidden"></ul>
+        <p id="enroll-clip-summary" class="status hidden"></p>
+        <div class="row">
+          <button class="touch" data-back type="button">Back</button>
+          <button id="enroll-clip-read" class="touch" type="button">Read clipboard</button>
+          <button id="enroll-clip-submit" class="touch hidden" type="button">Add selected</button>
+          <button id="enroll-clip-done" class="touch hidden" type="button">Done</button>
         </div>
       </div>
 

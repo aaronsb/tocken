@@ -13,6 +13,7 @@ export function initEnrollPanel(root, { onCancel, onAdded }) {
   const pastePane = root.querySelector('[data-step="paste"]');
   const manualPane = root.querySelector('[data-step="manual"]');
   const filePane = root.querySelector('[data-step="file"]');
+  const clipPane = root.querySelector('[data-step="clipboard"]');
 
   const uriInput = root.querySelector("#enroll-uri-input");
   const uriError = root.querySelector("#enroll-uri-error");
@@ -49,16 +50,18 @@ export function initEnrollPanel(root, { onCancel, onAdded }) {
     paste: "paste URI",
     manual: "manual entry",
     file: "file picker",
+    clipboard: "clipboard image",
   };
 
   const showStep = (key) => {
-    [sourcePane, pastePane, manualPane, filePane].forEach((p) =>
+    [sourcePane, pastePane, manualPane, filePane, clipPane].forEach((p) =>
       p.classList.add("hidden")
     );
     if (key === "source-picker") sourcePane.classList.remove("hidden");
     if (key === "paste") pastePane.classList.remove("hidden");
     if (key === "manual") manualPane.classList.remove("hidden");
     if (key === "file") filePane.classList.remove("hidden");
+    if (key === "clipboard") clipPane.classList.remove("hidden");
     stepLabel.textContent = labelMap[key] || "";
   };
 
@@ -93,6 +96,7 @@ export function initEnrollPanel(root, { onCancel, onAdded }) {
     manualSubmit.textContent = "Add";
     manualForceWeak = false;
     resetFilePane();
+    resetClipPane();
   };
 
   // Surface an EnrollError onto a paste/manual error+weak pair.
@@ -240,8 +244,11 @@ export function initEnrollPanel(root, { onCancel, onAdded }) {
     return err.kind || String(err);
   };
 
-  const renderFileRows = (rows) => {
-    fileRowsList.innerHTML = "";
+  // Render a list of FileRowPreview objects into `listEl`. Shared by
+  // the file-picker and clipboard-image sources; both surface the
+  // same row state machine and feed the same enroll_file_commit call.
+  const renderRowList = (listEl, rows) => {
+    listEl.innerHTML = "";
     rows.forEach((row, idx) => {
       const li = document.createElement("li");
       li.className = "enroll-file-row";
@@ -285,9 +292,46 @@ export function initEnrollPanel(root, { onCancel, onAdded }) {
       meta.appendChild(detail);
 
       li.appendChild(meta);
-      fileRowsList.appendChild(li);
+      listEl.appendChild(li);
     });
-    fileRowsList.classList.remove("hidden");
+    listEl.classList.remove("hidden");
+  };
+
+  // Read every checked row from `listEl`, look up its payload in
+  // `rows`, and produce the {payload, force_weak} items the backend
+  // expects. force_weak is implied by "row was weak AND user
+  // checked it" — the unchecked default for weak rows is the opt-in
+  // gesture per ADR-101.
+  const collectSelectedItems = (listEl, rows) => {
+    const items = [];
+    listEl
+      .querySelectorAll("input.enroll-file-row-include")
+      .forEach((cb) => {
+        if (!cb.checked) return;
+        const row = rows[Number(cb.dataset.idx)];
+        if (!row || !row.payload) return;
+        items.push({ payload: row.payload, force_weak: !!row.weak_bits });
+      });
+    return items;
+  };
+
+  // Surface a `FileError`-shaped error onto an arbitrary status line.
+  // Both file and clipboard sources funnel through this; some kinds
+  // (Empty plaintext) only fire from the file path, others
+  // (ClipboardEmpty) only from the clipboard path — but since the
+  // type is shared the renderer covers both.
+  const fileErrorMessage = (err) => {
+    if (!err) return "Unknown error";
+    if (err.kind === "empty") return "File is empty.";
+    if (err.kind === "no_codes_found")
+      return "No QR codes found in this image.";
+    if (err.kind === "clipboard_empty")
+      return "No image on clipboard. Copy a QR code image first.";
+    if (err.kind === "image")
+      return `Image decode failed: ${err.detail || "unknown"}`;
+    if (err.kind === "io")
+      return `Could not read file: ${err.detail || "unknown"}`;
+    return String(err.kind || err);
   };
 
   const showFileError = (msg) => {
@@ -324,14 +368,7 @@ export function initEnrollPanel(root, { onCancel, onAdded }) {
     try {
       rows = await invoke("enroll_file_preview", { path });
     } catch (err) {
-      if (err && err.kind === "empty") showFileError("File is empty.");
-      else if (err && err.kind === "no_codes_found")
-        showFileError("No QR codes found in this image.");
-      else if (err && err.kind === "image")
-        showFileError(`Image decode failed: ${err.detail || "unknown"}`);
-      else if (err && err.kind === "io")
-        showFileError(`Could not read file: ${err.detail || "unknown"}`);
-      else showFileError(String(err && err.kind ? err.kind : err));
+      showFileError(fileErrorMessage(err));
       return;
     }
     if (rows.length === 0) {
@@ -339,27 +376,14 @@ export function initEnrollPanel(root, { onCancel, onAdded }) {
       return;
     }
     fileRows = rows;
-    renderFileRows(rows);
+    renderRowList(fileRowsList, rows);
     filePick.classList.add("hidden");
     fileSubmit.classList.remove("hidden");
   };
 
   const submitFile = async () => {
     fileError.classList.add("hidden");
-    const checks = Array.from(
-      fileRowsList.querySelectorAll("input.enroll-file-row-include")
-    );
-    const items = [];
-    for (const cb of checks) {
-      if (!cb.checked) continue;
-      const idx = Number(cb.dataset.idx);
-      const row = fileRows[idx];
-      if (!row || !row.payload) continue;
-      items.push({
-        payload: row.payload,
-        force_weak: !!row.weak_bits, // checked-with-weak-bits implies user opt-in
-      });
-    }
+    const items = collectSelectedItems(fileRowsList, fileRows);
     if (items.length === 0) {
       showFileError("Nothing selected.");
       return;
@@ -410,6 +434,102 @@ export function initEnrollPanel(root, { onCancel, onAdded }) {
     fileDestroyPrompt.classList.add("hidden");
   });
   fileDone.addEventListener("click", () => {
+    onAdded();
+  });
+
+  // ─── Clipboard-image flow ─────────────────────────────────────────
+  // Variant of the file flow: image bytes come from the clipboard
+  // instead of disk, so there's no path to display and no destroy
+  // prompt at the end. Read happens Rust-side via the clipboard-
+  // manager plugin (arboard under the hood). The browser's
+  // navigator.clipboard.read() is denied by WebKitGTK in Tauri
+  // webviews on Linux even from a user-gesture context, so going
+  // through the plugin is the only path that works cross-display-
+  // server. Read is gated behind an explicit button click so the
+  // user has a clear permission gesture.
+
+  const clipStatus = root.querySelector("#enroll-clip-status");
+  const clipError = root.querySelector("#enroll-clip-error");
+  const clipRowsList = root.querySelector("#enroll-clip-rows");
+  const clipSummary = root.querySelector("#enroll-clip-summary");
+  const clipRead = root.querySelector("#enroll-clip-read");
+  const clipSubmit = root.querySelector("#enroll-clip-submit");
+  const clipDone = root.querySelector("#enroll-clip-done");
+
+  let clipRows = [];
+
+  const showClipError = (msg) => {
+    clipError.textContent = msg;
+    clipError.classList.remove("hidden");
+  };
+
+  const resetClipPane = () => {
+    clipRows = [];
+    clipStatus.textContent =
+      "Copy a QR code image to your clipboard, then click Read.";
+    clipStatus.classList.remove("hidden");
+    clipError.classList.add("hidden");
+    clipError.textContent = "";
+    clipRowsList.classList.add("hidden");
+    clipRowsList.innerHTML = "";
+    clipSummary.classList.add("hidden");
+    clipSummary.textContent = "";
+    clipRead.classList.remove("hidden");
+    clipSubmit.classList.add("hidden");
+    clipDone.classList.add("hidden");
+  };
+
+  const readClipboardImage = async () => {
+    clipError.classList.add("hidden");
+    let rows;
+    try {
+      rows = await invoke("enroll_clipboard_image_preview");
+    } catch (err) {
+      showClipError(fileErrorMessage(err));
+      return;
+    }
+    if (rows.length === 0) {
+      showClipError("No recognizable entries in the clipboard image.");
+      return;
+    }
+    clipRows = rows;
+    clipStatus.textContent = `Decoded ${rows.length} ${rows.length === 1 ? "entry" : "entries"} from clipboard image.`;
+    renderRowList(clipRowsList, rows);
+    clipRead.classList.add("hidden");
+    clipSubmit.classList.remove("hidden");
+  };
+
+  const submitClipboard = async () => {
+    clipError.classList.add("hidden");
+    const items = collectSelectedItems(clipRowsList, clipRows);
+    if (items.length === 0) {
+      showClipError("Nothing selected.");
+      return;
+    }
+    let result;
+    try {
+      result = await invoke("enroll_file_commit", { items });
+    } catch (err) {
+      showClipError(errorMessageFor(err));
+      return;
+    }
+    const added = result.outcomes.filter((o) => o.added_id).length;
+    const errors = result.outcomes.filter((o) => o.error).length;
+    let summary = `Added ${added} ${added === 1 ? "entry" : "entries"}.`;
+    if (errors > 0)
+      summary += ` ${errors} ${errors === 1 ? "row" : "rows"} skipped due to errors.`;
+    clipSummary.textContent = summary;
+    clipSummary.classList.remove("hidden");
+    clipSubmit.classList.add("hidden");
+    clipRowsList
+      .querySelectorAll("input.enroll-file-row-include")
+      .forEach((cb) => (cb.disabled = true));
+    clipDone.classList.remove("hidden");
+  };
+
+  clipRead.addEventListener("click", readClipboardImage);
+  clipSubmit.addEventListener("click", submitClipboard);
+  clipDone.addEventListener("click", () => {
     onAdded();
   });
 

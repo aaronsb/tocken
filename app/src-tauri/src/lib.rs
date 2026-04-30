@@ -290,6 +290,41 @@ fn enroll_file_preview(
     enroll::file::decode_file(std::path::Path::new(&path))
 }
 
+/// Read the system clipboard for a QR image and decode it. The
+/// browser-level `navigator.clipboard.read()` call is denied by
+/// WebKitGTK in Tauri webviews on Linux even from a user-gesture
+/// context, so we go Rust-side via clipboard-manager. arboard (the
+/// crate behind it) handles X11 / Wayland data-control / macOS / win.
+///
+/// `async` is load-bearing: Tauri dispatches sync commands on the
+/// IPC handler thread (== GTK main thread on Linux). arboard's
+/// docs warn that `read_image` from the main thread can deadlock
+/// when reading data the WebView itself published — the realistic
+/// trigger is screenshotting the tocken window. The plugin's own
+/// `read_image` command is `async fn` for the same reason.
+#[tauri::command]
+async fn enroll_clipboard_image_preview(
+    app: tauri::AppHandle,
+) -> Result<Vec<enroll::file::FileRowPreview>, enroll::file::FileError> {
+    use tauri_plugin_clipboard_manager::ClipboardExt;
+    let image = app.clipboard().read_image().map_err(|e| {
+        let detail = e.to_string();
+        // arboard::Error::ContentNotAvailable surfaces when the
+        // clipboard has no image (text, empty, etc.) — distinct
+        // from "image present but undecodable", which is a true
+        // image-decode failure.
+        if detail.contains("ContentNotAvailable") {
+            enroll::file::FileError::ClipboardEmpty
+        } else {
+            enroll::file::FileError::Image {
+                detail: format!("clipboard read failed: {detail}"),
+            }
+        }
+    })?;
+    let payloads = enroll::qr::decode_rgba(image.width(), image.height(), image.rgba())?;
+    Ok(enroll::file::decode_payloads(payloads))
+}
+
 /// Batch-commit a subset of rows from a previously-previewed file.
 /// Two-phase: (1) parse + vet every item into a Vec<Entry> with
 /// per-row outcomes; (2) if anything was planned, mutate the Store
@@ -563,6 +598,7 @@ fn anchor_top_right(window: &tauri::WebviewWindow) -> tauri::Result<()> {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
         .manage::<SessionState>(Mutex::new(SessionInner::new()))
         .invoke_handler(tauri::generate_handler![
             decrypt_store,
@@ -576,6 +612,7 @@ pub fn run() {
             enroll_manual,
             enroll_uri,
             enroll_file_preview,
+            enroll_clipboard_image_preview,
             enroll_file_commit,
             destroy_source_file,
             lock,
