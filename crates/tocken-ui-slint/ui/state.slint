@@ -13,7 +13,9 @@
 
 // One row of the unlocked code panel. Mirrors
 // `tocken_core::session::EntryCode` after stringification; see
-// `tick_codes` in src/main.rs.
+// `tick_codes` in src/main.rs. `selected` is set from the Rust-side
+// selection set (in `Unlocked`) so it survives the 1Hz tick that
+// rebuilds the model.
 export struct EntryRow {
     id: string,
     issuer: string,
@@ -22,6 +24,7 @@ export struct EntryRow {
     digits: int,
     period: int,
     time-remaining: int,
+    selected: bool,
 }
 
 // One decoded payload from a file-picker import. Mirrors
@@ -78,6 +81,19 @@ export global AppState {
     // ---- code panel (mode = 2) ----
     in-out property <[EntryRow]> entries: [];
     in-out property <int> relock-seconds: 0;
+    // Actions mode: when true, per-row checkboxes appear and the
+    // bottom action bar swaps to [Done | Remove | Update | Comment].
+    // Selection state lives in Rust (`Unlocked.selected_ids`) so
+    // each tick can reconstruct `EntryRow.selected` from it.
+    in-out property <bool> actions-active: false;
+    in-out property <int> selected-count: 0;
+    // Remove confirmation sub-state — flips to true between the
+    // user clicking Remove and confirming. Occludes the code panel
+    // with a "won't be recoverable" warning.
+    in-out property <bool> confirming-remove: false;
+    // Transient one-line status banner (e.g. "Coming next session"
+    // for unimplemented Update / Comment). Empty hides it.
+    in-out property <string> action-toast: "";
 
     // ---- enrollment (mode = 3) ----
     in-out property <int> enroll-source: 0;        // 0=paste, 1=manual, 2=file
@@ -119,4 +135,10 @@ export global AppState {
     callback choose-enroll-file();
     callback save-enroll-file();
     callback toggle-file-row(int);
+    // Actions mode
+    callback enter-actions();
+    callback exit-actions();
+    callback toggle-entry-selected(string);
+    callback confirm-remove();
+    callback show-coming-soon(string);
 }

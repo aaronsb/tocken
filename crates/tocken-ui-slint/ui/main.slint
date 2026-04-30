@@ -1,4 +1,4 @@
-import { Button, VerticalBox, HorizontalBox, ScrollView } from "std-widgets.slint";
+import { Button, CheckBox, VerticalBox, HorizontalBox, ScrollView } from "std-widgets.slint";
 import { AppState, EntryRow, FilePreviewRow } from "state.slint";
 import { WizardPane } from "wizard.slint";
 import { EnrollmentPane } from "enrollment.slint";
@@ -70,9 +70,44 @@ export component MainWindow inherits Window {
             }
         }
 
+        // ---------- mode 2 / remove confirmation ----------
+
+        if AppState.mode == 2 && AppState.confirming-remove: VerticalBox {
+            spacing: 14px;
+            alignment: center;
+            Text {
+                text: "Remove " + AppState.selected-count + " " + (AppState.selected-count == 1 ? "entry" : "entries") + "?";
+                font-size: 22px;
+                color: #f0f0f0;
+                horizontal-alignment: center;
+            }
+            Text {
+                text: "The TOTP secret will not be recoverable from the store after deletion. To use these codes again you would need to re-enroll from the original source (issuer's QR or URI).";
+                font-size: 12px;
+                color: #b0b0b0;
+                wrap: word-wrap;
+                horizontal-alignment: center;
+            }
+            HorizontalBox {
+                spacing: 12px;
+                Button {
+                    text: "Cancel";
+                    clicked => { AppState.confirming-remove = false; }
+                }
+                Button {
+                    text: "Remove";
+                    primary: true;
+                    clicked => {
+                        AppState.confirming-remove = false;
+                        AppState.confirm-remove();
+                    }
+                }
+            }
+        }
+
         // ---------- mode 2 / unlocked code panel ----------
 
-        if AppState.mode == 2: VerticalBox {
+        if AppState.mode == 2 && !AppState.confirming-remove: VerticalBox {
             spacing: 8px;
 
             HorizontalBox {
@@ -125,6 +160,12 @@ export component MainWindow inherits Window {
                         padding-bottom: 6px;
                         HorizontalBox {
                             spacing: 12px;
+                            if AppState.actions-active: CheckBox {
+                                checked: entry.selected;
+                                toggled => {
+                                    AppState.toggle-entry-selected(entry.id);
+                                }
+                            }
                             VerticalBox {
                                 spacing: 0px;
                                 Text {
@@ -173,8 +214,23 @@ export component MainWindow inherits Window {
                 }
             }
 
-            HorizontalBox {
-                spacing: 12px;
+            // Transient toast for "Coming next session" buttons.
+            if AppState.action-toast != "": Text {
+                text: AppState.action-toast;
+                color: #d0e8ff;
+                font-size: 11px;
+                horizontal-alignment: center;
+                wrap: word-wrap;
+            }
+
+            // Bottom action bar — swaps based on actions-active.
+            if !AppState.actions-active: HorizontalBox {
+                spacing: 8px;
+                Button {
+                    text: "Actions";
+                    enabled: AppState.entries.length > 0;
+                    clicked => { AppState.enter-actions(); }
+                }
                 Button {
                     text: "+ Add";
                     clicked => { AppState.open-enroll(); }
@@ -183,6 +239,29 @@ export component MainWindow inherits Window {
                 Button {
                     text: "Lock";
                     clicked => { AppState.lock(); }
+                }
+            }
+            if AppState.actions-active: HorizontalBox {
+                spacing: 8px;
+                Button {
+                    text: "Done";
+                    clicked => { AppState.exit-actions(); }
+                }
+                Rectangle { horizontal-stretch: 1; }
+                Button {
+                    text: AppState.selected-count > 0 ? ("Remove (" + AppState.selected-count + ")") : "Remove";
+                    enabled: AppState.selected-count > 0;
+                    clicked => { AppState.confirming-remove = true; }
+                }
+                Button {
+                    text: "Update";
+                    enabled: AppState.selected-count == 1;
+                    clicked => { AppState.show-coming-soon("Update lands next session — needs an edit form."); }
+                }
+                Button {
+                    text: "Comment";
+                    enabled: AppState.selected-count == 1;
+                    clicked => { AppState.show-coming-soon("Comment lands next session — needs a `comment` field on the store schema."); }
                 }
             }
         }
