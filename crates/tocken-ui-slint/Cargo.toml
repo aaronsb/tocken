@@ -1,0 +1,18 @@
+[package]
+name = "tocken-ui-slint"
+version = "0.1.0"
+description = "Slint UI for tocken (post-ADR-300)"
+authors = ["Aaron Bockelie"]
+edition = "2021"
+
+[[bin]]
+name = "tocken"
+path = "src/main.rs"
+
+[dependencies]
+tocken-core = { path = "../tocken-core" }
+slint = "1.13"
+secrecy = "0.10.3"
+
+[build-dependencies]
+slint-build = "1.13"

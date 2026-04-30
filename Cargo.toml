@@ -3,4 +3,5 @@ resolver = "2"
 members = [
     "app/src-tauri",
     "crates/tocken-core",
+    "crates/tocken-ui-slint",
 ]

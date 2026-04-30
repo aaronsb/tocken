@@ -1,0 +1,51 @@
+import { Button, VerticalBox } from "std-widgets.slint";
+
+export component MainWindow inherits Window {
+    title: "tocken — first run";
+    preferred-width: 360px;
+    preferred-height: 480px;
+    background: #111;
+
+    callback generate-passphrase();
+    in property <string> passphrase: "";
+
+    VerticalBox {
+        padding: 24px;
+        spacing: 16px;
+        alignment: center;
+
+        Text {
+            text: "tocken";
+            font-size: 28px;
+            color: #f0f0f0;
+            horizontal-alignment: center;
+        }
+
+        Text {
+            text: "TOTP wallet with hardware-key unlock.";
+            font-size: 13px;
+            color: #a0a0a0;
+            wrap: word-wrap;
+            horizontal-alignment: center;
+        }
+
+        Rectangle {
+            height: 24px;
+        }
+
+        Button {
+            text: "Generate recovery passphrase";
+            clicked => {
+                root.generate-passphrase();
+            }
+        }
+
+        Text {
+            text: root.passphrase == "" ? "(no passphrase generated yet)" : root.passphrase;
+            font-size: 14px;
+            color: root.passphrase == "" ? #555 : #d0e8ff;
+            wrap: word-wrap;
+            horizontal-alignment: center;
+        }
+    }
+}

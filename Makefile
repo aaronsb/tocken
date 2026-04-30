@@ -15,8 +15,12 @@ help: ## show this help
 		$(MAKEFILE_LIST)
 
 .PHONY: dev
-dev: ## run the Tauri app in dev mode (NPM=pnpm to override)
+dev: ## run the Tauri app in dev mode (NPM=pnpm to override) — legacy, pre-ADR-300
 	cd $(APP_DIR) && $(NPM) install && $(NPM) run tauri dev
+
+.PHONY: slint-dev
+slint-dev: ## run the Slint app in dev mode (post-ADR-300)
+	cargo run -p tocken-ui-slint
 
 .PHONY: build
 build: ## cargo build (debug, workspace)
