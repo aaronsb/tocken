@@ -1,0 +1,28 @@
+[package]
+name = "tocken-core"
+version = "0.1.0"
+description = "UI-agnostic crypto / store / session / enrollment / wizard for tocken"
+authors = ["Aaron Bockelie"]
+edition = "2021"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+tempfile = "3"
+age = { version = "0.11.3", features = ["plugin"] }
+secrecy = "0.10.3"
+zeroize = { version = "1.8.2", features = ["derive"] }
+ulid = "1.2.1"
+toml = "0.8"
+directories = "6.0.0"
+thiserror = "2.0.18"
+rand = "0.10.1"
+totp-rs = "5.7.1"
+rqrr = "0.10.1"
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg"] }
+url = "2.5"
+percent-encoding = "2.3"
+time = { version = "0.3", default-features = false, features = ["std", "formatting"] }
+
+[dev-dependencies]
+qrcode = { version = "0.14.1", default-features = false }
+serde_json = "1"

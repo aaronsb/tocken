@@ -19,32 +19,32 @@ dev: ## run the Tauri app in dev mode (NPM=pnpm to override)
 	cd $(APP_DIR) && $(NPM) install && $(NPM) run tauri dev
 
 .PHONY: build
-build: ## cargo build (debug)
-	cd $(TAURI_DIR) && cargo build
+build: ## cargo build (debug, workspace)
+	cargo build --workspace
 
 .PHONY: release
-release: ## cargo build --release
-	cd $(TAURI_DIR) && cargo build --release
+release: ## cargo build --release (workspace)
+	cargo build --workspace --release
 
 .PHONY: test
-test: ## cargo test --lib
-	cd $(TAURI_DIR) && cargo test --lib
+test: ## cargo test --lib (workspace)
+	cargo test --workspace --lib
 
 .PHONY: test-hw
 test-hw: ## run #[ignore]'d tests that require a YubiKey (serial; touch when prompted)
-	cd $(TAURI_DIR) && cargo test --lib -- --ignored --test-threads=1
+	cargo test --workspace --lib -- --ignored --test-threads=1
 
 .PHONY: fmt
-fmt: ## cargo fmt
-	cd $(TAURI_DIR) && cargo fmt
+fmt: ## cargo fmt (workspace)
+	cargo fmt --all
 
 .PHONY: fmt-check
-fmt-check: ## cargo fmt --check (CI-style)
-	cd $(TAURI_DIR) && cargo fmt --check
+fmt-check: ## cargo fmt --check (workspace, CI-style)
+	cargo fmt --all --check
 
 .PHONY: lint
-lint: ## cargo clippy
-	cd $(TAURI_DIR) && cargo clippy --all-targets -- -D warnings
+lint: ## cargo clippy (workspace)
+	cargo clippy --workspace --all-targets -- -D warnings
 
 .PHONY: check
 check: fmt-check lint test ## run fmt-check + lint + test (pre-PR gate)

@@ -8,19 +8,19 @@ use std::io::{BufRead, BufReader};
 use std::process::{Command, Stdio};
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc;
 use std::thread;
 
 use age::plugin::{Recipient as PluginRecipient, RecipientPluginV1};
 use age::NoCallbacks;
 use serde::Serialize;
-use tauri::{AppHandle, Emitter};
 
 use crate::store::BoxedRecipient;
 
-/// Backstop concurrency guard. The frontend disables the Provision
-/// button on first click, but a Tauri command is reachable from any
-/// future debug surface or JS path; two concurrent
-/// `age-plugin-yubikey --generate` calls would race the same PIV slot.
+/// Backstop concurrency guard. The UI disables the Provision button
+/// on first click, but the entry point is reachable from any future
+/// debug surface; two concurrent `age-plugin-yubikey --generate` calls
+/// would race the same PIV slot.
 static PROVISION_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
 
 const PLUGIN_BINARY: &str = "age-plugin-yubikey";
@@ -71,8 +71,6 @@ pub enum PluginError {
     PluginUnavailable(String),
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
-    #[error("emit: {0}")]
-    Emit(#[from] tauri::Error),
     #[error("a provisioning subprocess is already running")]
     AlreadyProvisioning,
 }
@@ -113,18 +111,24 @@ pub fn detect() -> Result<DetectResult, PluginError> {
 
 /// Spawn `age-plugin-yubikey --generate --touch-policy always
 /// --pin-policy never --slot 1` and stream its stdout/stderr to the
-/// frontend via the `wizard:provision-output` event so the user sees
-/// progress live ("Generating key...", "Touch your YubiKey").
+/// caller via `on_line` so the UI can show progress live ("Generating
+/// key...", "Touch your YubiKey").
 ///
 /// Stdout and stderr are drained concurrently on separate threads so
 /// neither pipe can fill its OS buffer (~64KB on Linux) while the
 /// other is being read. Sequential drain would deadlock if the plugin
-/// ever produced enough stderr to fill that buffer mid-run.
+/// ever produced enough stderr to fill that buffer mid-run. Drained
+/// lines flow through an mpsc channel back to this thread, which is
+/// the only one that touches `on_line` — so the callback need not be
+/// `Send`/`Sync`.
 ///
 /// TODO(#10): the slot is hardcoded to 1. #10 (backup & recovery /
 /// secondary YubiKey) needs to choose a free slot or accept one as
 /// a parameter.
-pub fn provision(app: &AppHandle) -> Result<ProvisionResult, PluginError> {
+pub fn provision<F>(mut on_line: F) -> Result<ProvisionResult, PluginError>
+where
+    F: FnMut(&str),
+{
     if PROVISION_IN_FLIGHT
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
         .is_err()
@@ -151,27 +155,46 @@ pub fn provision(app: &AppHandle) -> Result<ProvisionResult, PluginError> {
     let stdout = child.stdout.take().expect("stdout was piped");
     let stderr = child.stderr.take().expect("stderr was piped");
 
-    let app_for_stderr = app.clone();
-    let stderr_thread = thread::spawn(move || -> Result<String, std::io::Error> {
+    enum LineMsg {
+        Stdout(String),
+        Stderr(String),
+    }
+    let (tx, rx) = mpsc::channel::<LineMsg>();
+
+    let tx_stdout = tx.clone();
+    let stdout_thread = thread::spawn(move || -> Result<String, std::io::Error> {
         let mut buf = String::new();
-        for line in BufReader::new(stderr).lines() {
+        for line in BufReader::new(stdout).lines() {
             let line = line?;
-            let _ = app_for_stderr.emit("wizard:provision-output", &line);
             buf.push_str(&line);
             buf.push('\n');
+            let _ = tx_stdout.send(LineMsg::Stdout(line));
         }
         Ok(buf)
     });
 
-    let mut transcript = String::new();
-    let app_handle = app.clone();
-    for line in BufReader::new(stdout).lines() {
-        let line = line?;
-        emit_line(&app_handle, &line)?;
-        transcript.push_str(&line);
-        transcript.push('\n');
+    let tx_stderr = tx;
+    let stderr_thread = thread::spawn(move || -> Result<String, std::io::Error> {
+        let mut buf = String::new();
+        for line in BufReader::new(stderr).lines() {
+            let line = line?;
+            buf.push_str(&line);
+            buf.push('\n');
+            let _ = tx_stderr.send(LineMsg::Stderr(line));
+        }
+        Ok(buf)
+    });
+
+    while let Ok(msg) = rx.recv() {
+        let s = match msg {
+            LineMsg::Stdout(s) | LineMsg::Stderr(s) => s,
+        };
+        on_line(&s);
     }
 
+    let transcript = stdout_thread
+        .join()
+        .map_err(|_| std::io::Error::other("stdout drain thread panicked"))??;
     let stderr_buf = stderr_thread
         .join()
         .map_err(|_| std::io::Error::other("stderr drain thread panicked"))??;
@@ -201,10 +224,6 @@ impl Drop for ProvisionGuard {
     fn drop(&mut self) {
         PROVISION_IN_FLIGHT.store(false, Ordering::Release);
     }
-}
-
-fn emit_line(app: &AppHandle, line: &str) -> Result<(), tauri::Error> {
-    app.emit("wizard:provision-output", line)
 }
 
 /// Pull a `Key: value` line out of plugin output, accepting an

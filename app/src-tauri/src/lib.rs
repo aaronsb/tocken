@@ -1,18 +1,15 @@
-mod enroll;
-mod session;
-mod store;
-mod wizard;
-
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use age::secrecy::SecretString;
+use secrecy::SecretString;
 use serde::Serialize;
 use tauri::{
     menu::{MenuBuilder, MenuItemBuilder},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    LogicalPosition, Manager, Position, State,
+    Emitter, LogicalPosition, Manager, Position, State,
 };
+
+use tocken_core::{enroll, session, store, wizard};
 
 use session::unlock::{self, UnlockErrorIpc};
 use session::{EntryCode, Session};
@@ -218,7 +215,7 @@ fn enroll_with_form(
     mut form: enroll::EnrollForm,
     force_weak: bool,
 ) -> Result<EnrollSuccess, enroll::EnrollError> {
-    use age::secrecy::ExposeSecret;
+    use secrecy::ExposeSecret;
 
     let normalized = enroll::normalize_secret(form.secret.expose_secret());
     form.secret = SecretString::from(normalized);
@@ -359,7 +356,7 @@ fn enroll_file_commit(
     state: State<'_, SessionState>,
     items: Vec<FileCommitItem>,
 ) -> Result<FileCommitSummary, enroll::EnrollError> {
-    use age::secrecy::ExposeSecret;
+    use secrecy::ExposeSecret;
 
     let mut guard = state.lock().unwrap();
     let unlocked = guard.state.as_mut().ok_or(enroll::EnrollError::Locked)?;
@@ -522,7 +519,10 @@ fn detect_yubikey() -> Result<wizard::yubikey::DetectResult, String> {
 
 #[tauri::command]
 fn provision_yubikey(app: tauri::AppHandle) -> Result<wizard::yubikey::ProvisionResult, String> {
-    wizard::yubikey::provision(&app).map_err(|e| {
+    wizard::yubikey::provision(|line| {
+        let _ = app.emit("wizard:provision-output", line);
+    })
+    .map_err(|e| {
         eprintln!("provision_yubikey failed: {e:#}");
         format!("YubiKey provisioning failed: {e}")
     })
@@ -535,7 +535,7 @@ fn generate_passphrase() -> String {
     // user navigates past the passphrase pane. Wizard UX intentionally
     // disables click-to-copy to reduce clipboard exfiltration; the
     // heap residue itself is #13's concern.
-    use age::secrecy::ExposeSecret;
+    use secrecy::ExposeSecret;
     wizard::passphrase::generate(wizard::passphrase::DEFAULT_WORDS)
         .expose_secret()
         .to_string()

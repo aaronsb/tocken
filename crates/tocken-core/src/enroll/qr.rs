@@ -42,13 +42,12 @@ pub fn decode_image_bytes(image_bytes: &[u8]) -> Result<Vec<String>, QrError> {
 }
 
 /// Decode every QR present in raw RGBA pixel data (row-major, top to
-/// bottom — matches `tauri::image::Image::rgba()`). Used by the
-/// clipboard-image source: arboard/clipboard-manager hands us decoded
+/// bottom). Used by the clipboard-image source, which hands us decoded
 /// pixels rather than encoded image bytes.
 ///
-/// The `to_vec()` is unavoidable at this boundary: `Image::rgba()`
-/// returns `&[u8]` and exposes no method to move the underlying Vec
-/// out. One copy per click is fine — image decode itself dwarfs it.
+/// The caller may need a `to_vec()` at the boundary depending on what
+/// shape the clipboard library yields; one copy per click is fine —
+/// image decode itself dwarfs it.
 pub fn decode_rgba(width: u32, height: u32, rgba: &[u8]) -> Result<Vec<String>, QrError> {
     let buf = image::RgbaImage::from_raw(width, height, rgba.to_vec()).ok_or_else(|| {
         QrError::Decode(format!(
