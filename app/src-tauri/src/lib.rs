@@ -248,6 +248,129 @@ fn enroll_with_form(
     })
 }
 
+#[derive(serde::Deserialize)]
+struct FileCommitItem {
+    /// Raw `otpauth://` URI as the frontend received it from the
+    /// preview command. Backend re-parses + re-vets — JS doesn't get
+    /// to forge an `EnrollForm` shape past validation.
+    payload: String,
+    /// Per ADR-101: this row's "Use anyway" checkbox state. Honored
+    /// only if the row's secret is sub-128-bit.
+    force_weak: bool,
+}
+
+#[derive(Serialize)]
+struct FileCommitOutcome {
+    /// Truncated payload for display in the post-commit summary.
+    source: String,
+    /// ULID of the added entry, or None if this row was rejected at
+    /// parse / vet time.
+    added_id: Option<String>,
+    /// Per-row error. Save failures abort the whole batch and surface
+    /// as the command's outer error, not here.
+    error: Option<enroll::EnrollError>,
+}
+
+#[derive(Serialize)]
+struct FileCommitSummary {
+    outcomes: Vec<FileCommitOutcome>,
+    /// Entries in the store after the batch.
+    total_entries: usize,
+}
+
+#[tauri::command]
+fn enroll_file_preview(
+    path: String,
+) -> Result<Vec<enroll::file::FileRowPreview>, enroll::file::FileError> {
+    enroll::file::decode_file(std::path::Path::new(&path))
+}
+
+/// Batch-commit a subset of rows from a previously-previewed file.
+/// Two-phase: (1) parse + vet every item into a Vec<Entry> with
+/// per-row outcomes; (2) if anything was planned, mutate the Store
+/// and save once. Save failures match the single-entry path's
+/// behavior — error is surfaced and in-memory Store may briefly
+/// diverge from disk until the next unlock reloads.
+#[tauri::command]
+fn enroll_file_commit(
+    state: State<'_, SessionState>,
+    items: Vec<FileCommitItem>,
+) -> Result<FileCommitSummary, enroll::EnrollError> {
+    use age::secrecy::ExposeSecret;
+
+    let mut guard = state.lock().unwrap();
+    let unlocked = guard.state.as_mut().ok_or(enroll::EnrollError::Locked)?;
+
+    let mut outcomes = Vec::with_capacity(items.len());
+    let mut planned = Vec::new();
+
+    for item in items {
+        let source = enroll::file::truncate_for_display(&item.payload, 80);
+
+        let mut form = match enroll::parse::parse_otpauth_uri(&item.payload) {
+            Ok(f) => f,
+            Err(e) => {
+                outcomes.push(FileCommitOutcome {
+                    source,
+                    added_id: None,
+                    error: Some(e),
+                });
+                continue;
+            }
+        };
+
+        let normalized = enroll::normalize_secret(form.secret.expose_secret());
+        form.secret = SecretString::from(normalized);
+
+        if let Err(e) = enroll::vet_form(&form, item.force_weak) {
+            outcomes.push(FileCommitOutcome {
+                source,
+                added_id: None,
+                error: Some(e),
+            });
+            continue;
+        }
+
+        let entry = enroll::finalize_entry(form);
+        let entry_id = entry.id.clone();
+        planned.push(entry);
+        outcomes.push(FileCommitOutcome {
+            source,
+            added_id: Some(entry_id),
+            error: None,
+        });
+    }
+
+    if !planned.is_empty() {
+        for entry in planned {
+            unlocked.store.add_entry(entry);
+        }
+        unlocked.store.save().map_err(|e| {
+            eprintln!("enroll_file: save failed: {e:#}");
+            enroll::EnrollError::SaveFailed {
+                detail: e.to_string(),
+            }
+        })?;
+        let unlocked_at = unlocked.session.unlocked_at_unix();
+        unlocked.session = Session::new(unlocked.store.entries().to_vec(), unlocked_at);
+    }
+
+    Ok(FileCommitSummary {
+        outcomes,
+        total_entries: unlocked.store.entries().len(),
+    })
+}
+
+/// Best-effort secure delete of a source file the user picked. Zeros
+/// the bytes, fsyncs, then unlinks. The frontend prompt that gates
+/// this command surfaces the modern-fs caveat (CoW, journals, SSD
+/// wear leveling) — see issue #6.
+#[tauri::command]
+fn destroy_source_file(path: String) -> Result<(), String> {
+    enroll::file::destroy_file(std::path::Path::new(&path))
+        .map_err(|e| format!("could not destroy file: {e}"))
+}
+
 #[tauri::command]
 fn lock(state: State<'_, SessionState>) -> Result<(), String> {
     state.lock().unwrap().invalidate();
@@ -426,6 +549,7 @@ fn anchor_top_right(window: &tauri::WebviewWindow) -> tauri::Result<()> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .manage::<SessionState>(Mutex::new(SessionInner::new()))
         .invoke_handler(tauri::generate_handler![
             decrypt_store,
@@ -438,6 +562,9 @@ pub fn run() {
             get_codes,
             enroll_manual,
             enroll_uri,
+            enroll_file_preview,
+            enroll_file_commit,
+            destroy_source_file,
             lock,
             hide_window,
             quit_app
