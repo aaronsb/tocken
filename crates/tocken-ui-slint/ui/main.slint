@@ -11,6 +11,18 @@ struct EntryRow {
     time-remaining: int,
 }
 
+// One decoded payload from a file-picker import. Mirrors
+// `tocken_core::enroll::file::FileRowPreview` flattened for Slint:
+// either `error` is non-empty (parse / validate failure for that row)
+// OR issuer/account/payload are populated.
+struct FilePreviewRow {
+    issuer: string,
+    account: string,
+    weak-bits: int,    // 0 if not weak
+    error: string,     // empty if no error
+    payload: string,   // raw URI; Rust re-vets it on commit
+}
+
 export component MainWindow inherits Window {
     title: "tocken";
     preferred-width: 480px;
@@ -55,6 +67,25 @@ export component MainWindow inherits Window {
     in-out property <[EntryRow]> entries: [];
     in-out property <int> relock-seconds: 0;
 
+    // enrollment (mode = 3)
+    in-out property <int> enroll-source: 0;       // 0=paste, 1=manual, 2=file
+    in-out property <string> enroll-uri: "";
+    in-out property <string> enroll-issuer: "";
+    in-out property <string> enroll-account: "";
+    in-out property <string> enroll-secret: "";
+    in-out property <string> enroll-error: "";
+    in-out property <bool> enroll-weak-prompt: false;
+    in-out property <int> enroll-weak-bits: 0;
+    in-out property <bool> enroll-saving: false;
+    // file source
+    in-out property <string> enroll-file-path: "";
+    in-out property <bool> enroll-file-loading: false;
+    in-out property <[FilePreviewRow]> enroll-file-rows: [];
+    in-out property <int> enroll-file-valid: 0;
+    in-out property <int> enroll-file-weak: 0;
+    in-out property <int> enroll-file-error: 0;
+    in-out property <bool> enroll-file-force-weak: false;
+
     callback generate-passphrase();
     callback copy-passphrase();
     callback detect-yubikey();
@@ -62,6 +93,12 @@ export component MainWindow inherits Window {
     callback finalize();
     callback unlock();
     callback lock();
+    callback open-enroll();
+    callback cancel-enroll();
+    callback save-enroll();
+    callback save-enroll-force();
+    callback choose-enroll-file();
+    callback save-enroll-file();
 
     VerticalBox {
         padding: 24px;
@@ -541,10 +578,254 @@ export component MainWindow inherits Window {
 
             HorizontalBox {
                 spacing: 12px;
+                Button {
+                    text: "+ Add";
+                    clicked => { root.open-enroll(); }
+                }
                 Rectangle { horizontal-stretch: 1; }
                 Button {
                     text: "Lock";
                     clicked => { root.lock(); }
+                }
+            }
+        }
+
+        // ---------- mode 3 / enrollment ----------
+
+        if root.mode == 3 && root.enroll-weak-prompt: VerticalBox {
+            spacing: 12px;
+            alignment: center;
+            Text {
+                text: "Weak secret";
+                font-size: 22px;
+                color: #f0f0f0;
+                horizontal-alignment: center;
+            }
+            Text {
+                text: "This secret has " + root.enroll-weak-bits + " bits of entropy, less than RFC 4226's 128-bit minimum. The code will still work but is more brute-forceable than recommended.";
+                font-size: 12px;
+                color: #b0b0b0;
+                wrap: word-wrap;
+                horizontal-alignment: center;
+            }
+            HorizontalBox {
+                spacing: 12px;
+                Button {
+                    text: "Cancel";
+                    clicked => {
+                        root.enroll-weak-prompt = false;
+                    }
+                }
+                Button {
+                    text: "Use anyway";
+                    primary: true;
+                    clicked => {
+                        root.enroll-weak-prompt = false;
+                        root.save-enroll-force();
+                    }
+                }
+            }
+        }
+
+        if root.mode == 3 && !root.enroll-weak-prompt: VerticalBox {
+            spacing: 10px;
+
+            HorizontalBox {
+                spacing: 6px;
+                Text {
+                    text: "Add entry";
+                    font-size: 18px;
+                    color: #f0f0f0;
+                    vertical-alignment: center;
+                }
+                Rectangle { horizontal-stretch: 1; }
+                Button {
+                    text: "Cancel";
+                    clicked => { root.cancel-enroll(); }
+                }
+            }
+
+            HorizontalBox {
+                spacing: 6px;
+                Button {
+                    text: "Paste URI";
+                    primary: root.enroll-source == 0;
+                    clicked => {
+                        root.enroll-source = 0;
+                        root.enroll-error = "";
+                    }
+                }
+                Button {
+                    text: "Manual";
+                    primary: root.enroll-source == 1;
+                    clicked => {
+                        root.enroll-source = 1;
+                        root.enroll-error = "";
+                    }
+                }
+                Button {
+                    text: "File";
+                    primary: root.enroll-source == 2;
+                    clicked => {
+                        root.enroll-source = 2;
+                        root.enroll-error = "";
+                    }
+                }
+            }
+
+            // ---- paste ----
+
+            if root.enroll-source == 0: VerticalBox {
+                spacing: 6px;
+                Text {
+                    text: "Paste an otpauth:// URI.";
+                    font-size: 12px;
+                    color: #888;
+                }
+                LineEdit {
+                    placeholder-text: "otpauth://totp/Issuer:account?secret=…";
+                    text <=> root.enroll-uri;
+                }
+            }
+
+            // ---- manual ----
+
+            if root.enroll-source == 1: VerticalBox {
+                spacing: 6px;
+                Text {
+                    text: "Issuer";
+                    font-size: 11px;
+                    color: #888;
+                }
+                LineEdit {
+                    placeholder-text: "e.g. GitHub";
+                    text <=> root.enroll-issuer;
+                }
+                Text {
+                    text: "Account";
+                    font-size: 11px;
+                    color: #888;
+                }
+                LineEdit {
+                    placeholder-text: "e.g. alice@example.com";
+                    text <=> root.enroll-account;
+                }
+                Text {
+                    text: "Secret (base32)";
+                    font-size: 11px;
+                    color: #888;
+                }
+                LineEdit {
+                    placeholder-text: "JBSWY3DPEHPK3PXP…";
+                    text <=> root.enroll-secret;
+                }
+                Text {
+                    text: "TOTP, SHA-1, 6 digits, 30s — defaults match the common case.";
+                    font-size: 10px;
+                    color: #555;
+                }
+            }
+
+            // ---- file ----
+
+            if root.enroll-source == 2: VerticalBox {
+                spacing: 6px;
+                Text {
+                    text: "Pick a file containing otpauth:// URIs (one per line) or an image (PNG/JPEG) with QR codes.";
+                    font-size: 12px;
+                    color: #888;
+                    wrap: word-wrap;
+                }
+                HorizontalBox {
+                    spacing: 6px;
+                    Button {
+                        text: root.enroll-file-loading ? "Reading…" : "Choose file…";
+                        enabled: !root.enroll-file-loading;
+                        clicked => { root.choose-enroll-file(); }
+                    }
+                    Text {
+                        text: root.enroll-file-path;
+                        font-size: 10px;
+                        color: #555;
+                        vertical-alignment: center;
+                        wrap: word-wrap;
+                    }
+                }
+                if root.enroll-file-rows.length > 0: VerticalBox {
+                    spacing: 4px;
+                    Text {
+                        text: root.enroll-file-valid + " ready, " + root.enroll-file-weak + " weak, " + root.enroll-file-error + " error";
+                        font-size: 11px;
+                        color: #b0b0b0;
+                    }
+                    Rectangle {
+                        height: 160px;
+                        background: #1a1a1a;
+                        border-radius: 4px;
+                        ScrollView {
+                            VerticalBox {
+                                spacing: 2px;
+                                padding: 6px;
+                                for row in root.enroll-file-rows: HorizontalBox {
+                                    spacing: 6px;
+                                    Text {
+                                        text: row.error != "" ? "✗" : (row.weak-bits > 0 ? "⚠" : "✓");
+                                        font-size: 11px;
+                                        color: row.error != "" ? #ff8080 : (row.weak-bits > 0 ? #e0c060 : #80c080);
+                                    }
+                                    Text {
+                                        text: row.error != "" ? row.error : (row.issuer + "  " + row.account);
+                                        font-size: 10px;
+                                        color: row.error != "" ? #ff8080 : #d0d0d0;
+                                        wrap: word-wrap;
+                                        overflow: elide;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if root.enroll-file-weak > 0: HorizontalBox {
+                        spacing: 6px;
+                        Text {
+                            text: "Include weak rows (< 128-bit secrets):";
+                            font-size: 11px;
+                            color: #b0b0b0;
+                            vertical-alignment: center;
+                        }
+                        Rectangle { horizontal-stretch: 1; }
+                        Button {
+                            text: root.enroll-file-force-weak ? "Yes ✓" : "No";
+                            clicked => {
+                                root.enroll-file-force-weak = !root.enroll-file-force-weak;
+                            }
+                        }
+                    }
+                }
+            }
+
+            if root.enroll-error != "": Text {
+                text: root.enroll-error;
+                color: #ff8080;
+                font-size: 12px;
+                wrap: word-wrap;
+            }
+
+            Rectangle { vertical-stretch: 1; }
+
+            HorizontalBox {
+                spacing: 12px;
+                Rectangle { horizontal-stretch: 1; }
+                Button {
+                    text: root.enroll-saving ? "Saving…" : "Save";
+                    primary: true;
+                    enabled: !root.enroll-saving;
+                    clicked => {
+                        if root.enroll-source == 2 {
+                            root.save-enroll-file();
+                        } else {
+                            root.save-enroll();
+                        }
+                    }
                 }
             }
         }
