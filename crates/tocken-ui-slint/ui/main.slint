@@ -7,6 +7,7 @@ struct EntryRow {
     issuer: string,
     account: string,
     code: string,
+    digits: int,
     period: int,
     time-remaining: int,
 }
@@ -73,6 +74,8 @@ export component MainWindow inherits Window {
     in-out property <string> enroll-issuer: "";
     in-out property <string> enroll-account: "";
     in-out property <string> enroll-secret: "";
+    in-out property <string> enroll-digits: "6";
+    in-out property <string> enroll-period: "30";
     in-out property <string> enroll-error: "";
     in-out property <bool> enroll-weak-prompt: false;
     in-out property <int> enroll-weak-bits: 0;
@@ -552,11 +555,21 @@ export component MainWindow inherits Window {
                         }
                     }
                     Rectangle { horizontal-stretch: 1; }
-                    Text {
-                        text: entry.code;
-                        color: #d0e8ff;
-                        font-size: 22px;
-                        vertical-alignment: center;
+                    VerticalBox {
+                        spacing: 0px;
+                        alignment: center;
+                        Text {
+                            text: entry.code;
+                            color: #d0e8ff;
+                            font-size: 22px;
+                            horizontal-alignment: right;
+                        }
+                        Text {
+                            text: entry.digits + "d / " + entry.period + "s";
+                            color: #555;
+                            font-size: 9px;
+                            horizontal-alignment: right;
+                        }
                     }
                 }
                 Rectangle {
@@ -719,8 +732,33 @@ export component MainWindow inherits Window {
                     placeholder-text: "JBSWY3DPEHPK3PXP…";
                     text <=> root.enroll-secret;
                 }
+                HorizontalBox {
+                    spacing: 8px;
+                    VerticalBox {
+                        spacing: 2px;
+                        Text {
+                            text: "Digits (6-8)";
+                            font-size: 11px;
+                            color: #888;
+                        }
+                        LineEdit {
+                            text <=> root.enroll-digits;
+                        }
+                    }
+                    VerticalBox {
+                        spacing: 2px;
+                        Text {
+                            text: "Period (s)";
+                            font-size: 11px;
+                            color: #888;
+                        }
+                        LineEdit {
+                            text <=> root.enroll-period;
+                        }
+                    }
+                }
                 Text {
-                    text: "TOTP, SHA-1, 6 digits, 30s — defaults match the common case.";
+                    text: "TOTP, SHA-1. Defaults (6 digits, 30s) match the common case.";
                     font-size: 10px;
                     color: #555;
                 }

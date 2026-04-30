@@ -360,6 +360,7 @@ fn entry_row_from_code(c: EntryCode) -> EntryRow {
         issuer: c.issuer.into(),
         account: c.account.into(),
         code: format_code(&c.code).into(),
+        digits: c.digits as i32,
         period: c.period as i32,
         time_remaining: c.time_remaining as i32,
     }
@@ -439,6 +440,8 @@ fn clear_enroll_state(ui: &MainWindow) {
     ui.set_enroll_issuer("".into());
     ui.set_enroll_account("".into());
     ui.set_enroll_secret("".into());
+    ui.set_enroll_digits("6".into());
+    ui.set_enroll_period("30".into());
     ui.set_enroll_error("".into());
     ui.set_enroll_weak_prompt(false);
     ui.set_enroll_weak_bits(0);
@@ -517,13 +520,22 @@ fn parse_paste_form(ui: &MainWindow) -> Result<EnrollForm, EnrollError> {
     enroll::parse::parse_otpauth_uri(trimmed)
 }
 
+/// Build an `EnrollForm` from the manual-entry form fields. `digits`
+/// and `period` are typed as text in Slint so the user can edit
+/// freely; we parse here with a fall-through to the RFC defaults if
+/// the field is empty or non-numeric. Range validation
+/// (`6..=8` digits, `1..=86400` period) is left to
+/// `enroll::vet_form` so the error surfaces through the same path
+/// every other invalid form takes.
 fn build_manual_form(ui: &MainWindow) -> EnrollForm {
+    let digits = ui.get_enroll_digits().trim().parse::<u8>().unwrap_or(6);
+    let period = ui.get_enroll_period().trim().parse::<u32>().unwrap_or(30);
     EnrollForm {
         issuer: ui.get_enroll_issuer().to_string(),
         account: ui.get_enroll_account().to_string(),
         secret: SecretString::from(ui.get_enroll_secret().to_string()),
-        digits: 6,
-        period: 30,
+        digits,
+        period,
         algorithm: Algorithm::Sha1,
         kind: EntryKind::Totp,
     }
