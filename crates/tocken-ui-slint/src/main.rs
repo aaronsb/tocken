@@ -7,6 +7,7 @@
 //! plugin output line-by-line into the UI's provision-log property.
 
 use std::thread;
+use std::time::Duration;
 
 use secrecy::{ExposeSecret, SecretString};
 use slint::ComponentHandle;
@@ -20,6 +21,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     populate_paths(&ui);
     wire_passphrase(&ui);
+    wire_copy_passphrase(&ui);
     wire_detect(&ui);
     wire_provision(&ui);
     wire_finalize(&ui);
@@ -44,6 +46,32 @@ fn wire_passphrase(ui: &MainWindow) {
         if let Some(ui) = weak.upgrade() {
             ui.set_passphrase(phrase.expose_secret().into());
         }
+    });
+}
+
+fn wire_copy_passphrase(ui: &MainWindow) {
+    let weak = ui.as_weak();
+    ui.on_copy_passphrase(move || {
+        let Some(ui) = weak.upgrade() else {
+            return;
+        };
+        let phrase = ui.get_passphrase().to_string();
+        if phrase.is_empty() {
+            return;
+        }
+        let copied = arboard::Clipboard::new()
+            .and_then(|mut cb| cb.set_text(phrase))
+            .is_ok();
+        if !copied {
+            return;
+        }
+        ui.set_passphrase_copied(true);
+        let weak_reset = weak.clone();
+        slint::Timer::single_shot(Duration::from_secs(2), move || {
+            if let Some(ui) = weak_reset.upgrade() {
+                ui.set_passphrase_copied(false);
+            }
+        });
     });
 }
 

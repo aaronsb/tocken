@@ -7451,6 +7451,7 @@ dependencies = [
 name = "tocken-ui-slint"
 version = "0.1.0"
 dependencies = [
+ "arboard",
  "secrecy",
  "slint",
  "slint-build",

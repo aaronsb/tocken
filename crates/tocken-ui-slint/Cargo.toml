@@ -13,6 +13,7 @@ path = "src/main.rs"
 tocken-core = { path = "../tocken-core" }
 slint = "1.13"
 secrecy = "0.10.3"
+arboard = "3"
 
 [build-dependencies]
 slint-build = "1.13"

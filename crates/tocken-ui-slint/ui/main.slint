@@ -20,6 +20,7 @@ export component MainWindow inherits Window {
     in-out property <string> passphrase: "";
     in-out property <string> passphrase-confirm: "";
     in-out property <bool> confirm-error: false;
+    in-out property <bool> passphrase-copied: false;
 
     // yubikey pane
     in-out property <bool> yubikey-detected: false;
@@ -39,6 +40,7 @@ export component MainWindow inherits Window {
     in-out property <string> finalize-error: "";
 
     callback generate-passphrase();
+    callback copy-passphrase();
     callback detect-yubikey();
     callback provision-yubikey();
     callback finalize();
@@ -144,7 +146,14 @@ export component MainWindow inherits Window {
                 spacing: 12px;
                 Button {
                     text: "Regenerate";
-                    clicked => { root.generate-passphrase(); }
+                    clicked => {
+                        root.passphrase-copied = false;
+                        root.generate-passphrase();
+                    }
+                }
+                Button {
+                    text: root.passphrase-copied ? "Copied ✓" : "Copy";
+                    clicked => { root.copy-passphrase(); }
                 }
                 Button {
                     text: "I've written it down";
