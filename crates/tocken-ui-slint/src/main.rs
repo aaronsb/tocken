@@ -59,12 +59,31 @@ fn wire_copy_passphrase(ui: &MainWindow) {
         if phrase.is_empty() {
             return;
         }
-        let copied = arboard::Clipboard::new()
-            .and_then(|mut cb| cb.set_text(phrase))
-            .is_ok();
-        if !copied {
-            return;
-        }
+
+        // On Linux X11/Wayland the clipboard contents are owned by
+        // the writing process; dropping the `Clipboard` handle
+        // releases ownership immediately, often before a clipboard
+        // manager or paste consumer can fetch the bytes. arboard's
+        // `SetExtLinux::wait()` runs the selection loop on the
+        // calling thread until ownership is transferred — so we hand
+        // it a dedicated thread to block on. On non-Linux platforms
+        // `set_text` is synchronous and persistent; the cfg gate
+        // keeps this from breaking macOS / Windows builds.
+        std::thread::spawn(move || {
+            let Ok(mut cb) = arboard::Clipboard::new() else {
+                return;
+            };
+            #[cfg(target_os = "linux")]
+            {
+                use arboard::SetExtLinux;
+                let _ = cb.set().wait().text(phrase);
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                let _ = cb.set_text(phrase);
+            }
+        });
+
         ui.set_passphrase_copied(true);
         let weak_reset = weak.clone();
         slint::Timer::single_shot(Duration::from_secs(2), move || {
