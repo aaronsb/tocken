@@ -74,6 +74,10 @@ pub enum FileError {
     Image { detail: String },
     #[error("no QR codes found in image")]
     NoCodesFound,
+    /// QR found but Reed-Solomon couldn't recover the payload —
+    /// capture-quality issue (focus, lighting, distance, motion).
+    #[error("QR detected but could not be decoded")]
+    QualityTooLow,
     /// Clipboard didn't carry an image at all (text, empty, etc.).
     /// Distinct from `Image` — that's "tried to decode and failed",
     /// which is a different user-facing message.
@@ -93,6 +97,7 @@ impl From<QrError> for FileError {
     fn from(e: QrError) -> Self {
         match e {
             QrError::NoCodesFound => FileError::NoCodesFound,
+            QrError::QualityTooLow => FileError::QualityTooLow,
             QrError::Image(err) => FileError::Image {
                 detail: err.to_string(),
             },
