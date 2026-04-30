@@ -27,13 +27,17 @@ export struct EntryRow {
 // One decoded payload from a file-picker import. Mirrors
 // `tocken_core::enroll::file::FileRowPreview` flattened for Slint:
 // either `error` is non-empty (parse / validate failure for that
-// row) OR issuer/account/payload are populated.
+// row) OR issuer/account/payload are populated. `selected` drives
+// the per-row checkbox; the Rust toggle handler flips it via
+// `Model::set_row_data`. Default selection: valid rows in, weak
+// rows out (explicit opt-in), error rows can't be selected at all.
 export struct FilePreviewRow {
     issuer: string,
     account: string,
     weak-bits: int,
     error: string,
     payload: string,
+    selected: bool,
 }
 
 export global AppState {
@@ -94,7 +98,11 @@ export global AppState {
     in-out property <int> enroll-file-valid: 0;
     in-out property <int> enroll-file-weak: 0;
     in-out property <int> enroll-file-error: 0;
-    in-out property <bool> enroll-file-force-weak: false;
+    // Optional: zero-fill + unlink the source file after a successful
+    // batch import. Off by default — destructive action. Best-effort
+    // under modern filesystem realities (CoW, journals, SSD wear
+    // leveling) per `enroll::file::destroy_file`.
+    in-out property <bool> enroll-destroy-source: false;
 
     // ---- callbacks ----
     callback generate-passphrase();
@@ -110,4 +118,5 @@ export global AppState {
     callback save-enroll-force();
     callback choose-enroll-file();
     callback save-enroll-file();
+    callback toggle-file-row(int);
 }

@@ -453,6 +453,30 @@ fn wire_enroll(ui: &MainWindow, unlocked: SharedUnlocked) {
     wire_save_enroll(ui, unlocked.clone(), true);
     wire_choose_enroll_file(ui);
     wire_save_enroll_file(ui, unlocked);
+    wire_toggle_file_row(ui);
+}
+
+/// Per-row checkbox handler. Slint passes the row's `for[i]` index;
+/// we mutate the model entry in place via `set_row_data`. Error rows
+/// have no checkbox at all (the `.slint` `if row.error == ""` branch
+/// hides it), so a stray index for an error row is a no-op.
+fn wire_toggle_file_row(ui: &MainWindow) {
+    let weak = ui.as_weak();
+    ui.global::<AppState>().on_toggle_file_row(move |index| {
+        let Some(ui) = weak.upgrade() else {
+            return;
+        };
+        let model = ui.global::<AppState>().get_enroll_file_rows();
+        let idx = index as usize;
+        let Some(mut row) = model.row_data(idx) else {
+            return;
+        };
+        if !row.error.is_empty() {
+            return;
+        }
+        row.selected = !row.selected;
+        model.set_row_data(idx, row);
+    });
 }
 
 fn clear_enroll_state(ui: &MainWindow) {
@@ -474,7 +498,7 @@ fn clear_enroll_state(ui: &MainWindow) {
     state.set_enroll_file_valid(0);
     state.set_enroll_file_weak(0);
     state.set_enroll_file_error(0);
-    state.set_enroll_file_force_weak(false);
+    state.set_enroll_destroy_source(false);
 }
 
 /// Wire either `on_save_enroll` (force_weak=false) or
@@ -641,12 +665,14 @@ fn wire_choose_enroll_file(ui: &MainWindow) {
                         let display_rows: Vec<FilePreviewRow> = rows
                             .into_iter()
                             .map(|r| {
-                                let error = r.error.map(|e| e.to_string()).unwrap_or_default();
+                                let error_str = r.error.map(|e| e.to_string()).unwrap_or_default();
                                 let weak_bits = r.weak_bits.unwrap_or(0) as i32;
                                 let payload = r.payload.unwrap_or_default();
-                                if !error.is_empty() {
+                                let is_error = !error_str.is_empty();
+                                let is_weak = !is_error && weak_bits > 0;
+                                if is_error {
                                     errors += 1;
-                                } else if weak_bits > 0 {
+                                } else if is_weak {
                                     weak += 1;
                                 } else {
                                     valid += 1;
@@ -655,8 +681,13 @@ fn wire_choose_enroll_file(ui: &MainWindow) {
                                     issuer: r.issuer.unwrap_or_default().into(),
                                     account: r.account.unwrap_or_default().into(),
                                     weak_bits,
-                                    error: error.into(),
+                                    error: error_str.into(),
                                     payload: payload.into(),
+                                    // Default selection: strong+valid
+                                    // rows in. Weak rows require an
+                                    // explicit checkbox click to opt
+                                    // in. Error rows have no checkbox.
+                                    selected: !is_error && !is_weak,
                                 }
                             })
                             .collect();
@@ -688,21 +719,16 @@ fn wire_save_enroll_file(ui: &MainWindow, unlocked: SharedUnlocked) {
         state.set_enroll_error("".into());
         state.set_enroll_saving(true);
 
-        // Snapshot the rows and the force-weak toggle off the UI so we
-        // don't borrow the model across the commit loop.
-        let force_weak = state.get_enroll_file_force_weak();
+        let destroy_source = state.get_enroll_destroy_source();
+        let source_path = state.get_enroll_file_path().to_string();
         let rows_model = state.get_enroll_file_rows();
         let mut payloads: Vec<(String, bool)> = Vec::new();
         for i in 0..rows_model.row_count() {
             if let Some(row) = rows_model.row_data(i) {
-                if !row.error.is_empty() {
+                if !row.selected || !row.error.is_empty() {
                     continue;
                 }
-                let is_weak = row.weak_bits > 0;
-                if is_weak && !force_weak {
-                    continue;
-                }
-                payloads.push((row.payload.to_string(), is_weak));
+                payloads.push((row.payload.to_string(), row.weak_bits > 0));
             }
         }
 
@@ -716,24 +742,32 @@ fn wire_save_enroll_file(ui: &MainWindow, unlocked: SharedUnlocked) {
                     continue;
                 }
             };
-            // For weak rows the user already opted in via the toggle.
+            // The user explicitly checked any weak row; honour their
+            // opt-in by passing `force_weak=true` for those.
             match commit_form(&unlocked, form, is_weak) {
                 Ok(()) => added += 1,
-                Err(e) => {
-                    last_err = Some(e.to_string());
-                }
+                Err(e) => last_err = Some(e.to_string()),
             }
         }
 
         state.set_enroll_saving(false);
         if added > 0 {
+            // Best-effort source destruction — failures here don't
+            // roll back the imports. `destroy_file` zero-fills then
+            // unlinks; see issue #6 caveat about CoW / journals /
+            // SSD wear leveling for limits.
+            if destroy_source && !source_path.is_empty() {
+                if let Err(e) = enroll::file::destroy_file(std::path::Path::new(&source_path)) {
+                    eprintln!("destroy_file failed for {source_path}: {e}");
+                }
+            }
             clear_enroll_state(&ui);
             ui.global::<AppState>().set_mode(2);
             tick_codes(&ui, &unlocked);
         } else if let Some(msg) = last_err {
             state.set_enroll_error(format!("Nothing added. Last error: {msg}").into());
         } else {
-            state.set_enroll_error("Nothing to add — pick a file first.".into());
+            state.set_enroll_error("No rows selected — tick at least one row to import.".into());
         }
     });
 }

@@ -1,4 +1,4 @@
-import { Button, VerticalBox, HorizontalBox, LineEdit, ScrollView } from "std-widgets.slint";
+import { Button, CheckBox, VerticalBox, HorizontalBox, LineEdit, ScrollView } from "std-widgets.slint";
 import { AppState } from "state.slint";
 
 // Mode = 3 enrollment flow: source picker (paste / manual / file)
@@ -194,53 +194,54 @@ export component EnrollmentPane inherits VerticalBox {
                 }
             }
             if AppState.enroll-file-rows.length > 0: VerticalBox {
-                spacing: 4px;
+                spacing: 6px;
                 Text {
-                    text: AppState.enroll-file-valid + " ready, " + AppState.enroll-file-weak + " weak, " + AppState.enroll-file-error + " error";
+                    text: AppState.enroll-file-valid + " ready, " + AppState.enroll-file-weak + " weak (off by default), " + AppState.enroll-file-error + " error";
                     font-size: 11px;
                     color: #b0b0b0;
                 }
                 Rectangle {
-                    height: 160px;
+                    height: 180px;
                     background: #1a1a1a;
                     border-radius: 4px;
                     ScrollView {
                         VerticalBox {
-                            spacing: 2px;
-                            padding: 6px;
-                            for row in AppState.enroll-file-rows: HorizontalBox {
-                                spacing: 6px;
-                                Text {
-                                    text: row.error != "" ? "✗" : (row.weak-bits > 0 ? "⚠" : "✓");
-                                    font-size: 11px;
-                                    color: row.error != "" ? #ff8080 : (row.weak-bits > 0 ? #e0c060 : #80c080);
+                            spacing: 4px;
+                            padding: 8px;
+                            for row[i] in AppState.enroll-file-rows: HorizontalBox {
+                                spacing: 8px;
+                                if row.error == "": CheckBox {
+                                    checked: row.selected;
+                                    toggled => { AppState.toggle-file-row(i); }
+                                }
+                                if row.error != "": Text {
+                                    text: "✗";
+                                    color: #ff8080;
+                                    font-size: 13px;
+                                    vertical-alignment: center;
                                 }
                                 Text {
                                     text: row.error != "" ? row.error : (row.issuer + "  " + row.account);
-                                    font-size: 10px;
+                                    font-size: 12px;
                                     color: row.error != "" ? #ff8080 : #d0d0d0;
                                     wrap: word-wrap;
                                     overflow: elide;
+                                    horizontal-stretch: 1;
+                                    vertical-alignment: center;
+                                }
+                                if row.weak-bits > 0 && row.error == "": Text {
+                                    text: "⚠ " + row.weak-bits + "b";
+                                    color: #e0c060;
+                                    font-size: 11px;
+                                    vertical-alignment: center;
                                 }
                             }
                         }
                     }
                 }
-                if AppState.enroll-file-weak > 0: HorizontalBox {
-                    spacing: 6px;
-                    Text {
-                        text: "Include weak rows (< 128-bit secrets):";
-                        font-size: 11px;
-                        color: #b0b0b0;
-                        vertical-alignment: center;
-                    }
-                    Rectangle { horizontal-stretch: 1; }
-                    Button {
-                        text: AppState.enroll-file-force-weak ? "Yes ✓" : "No";
-                        clicked => {
-                            AppState.enroll-file-force-weak = !AppState.enroll-file-force-weak;
-                        }
-                    }
+                CheckBox {
+                    text: "⚠ Delete source file after import (zero-fill + unlink — best-effort)";
+                    checked <=> AppState.enroll-destroy-source;
                 }
             }
         }
