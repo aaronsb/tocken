@@ -13,11 +13,8 @@
 //!   Tauri command boundary.
 
 pub mod error;
+pub mod file;
 pub mod parse;
-// TODO(#6): consumed by file-picker (#6 file source) and camera (#6
-// camera source) — both land in follow-on commits. Allow dead-code
-// while the consumers are pending.
-#[allow(dead_code)]
 pub mod qr;
 pub mod validate;
 

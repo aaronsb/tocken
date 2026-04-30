@@ -496,3 +496,74 @@ pre {
 .enroll #enroll-cancel:hover {
   color: #eaeaea;
 }
+
+/* File-source row list — preview before commit. */
+
+.enroll-file-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.enroll-file-row {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  padding: 6px 8px;
+  background: #1a1d23;
+  border: 1px solid #2a2d36;
+  border-radius: 4px;
+}
+
+.enroll-file-row input[type="checkbox"] {
+  margin-top: 2px;
+  cursor: pointer;
+}
+
+.enroll-file-row input[type="checkbox"]:disabled {
+  cursor: not-allowed;
+}
+
+.enroll-file-row-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.enroll-file-row-title {
+  font-size: 13px;
+  color: #eaeaea;
+  word-break: break-all;
+}
+
+.enroll-file-row-error-title {
+  color: #888;
+  font-family: ui-monospace, monospace;
+  font-size: 11px;
+}
+
+.enroll-file-row-detail {
+  font-size: 11px;
+  color: #888;
+}
+
+.enroll-file-row-detail.warn {
+  color: #e8d0a0;
+}
+
+.enroll-file-row-detail.err {
+  color: #e8a0a0;
+}
+
+.enroll-destroy {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}

@@ -107,6 +107,7 @@
         <div class="enroll-sources">
           <button class="touch" data-source="paste" type="button">Paste otpauth:// URI</button>
           <button class="touch" data-source="manual" type="button">Type it manually</button>
+          <button class="touch" data-source="file" type="button">Pick a file (image or text)</button>
         </div>
         <button id="enroll-cancel" type="button">Cancel</button>
       </div>
@@ -119,6 +120,26 @@
         <div class="row">
           <button class="touch" data-back type="button">Back</button>
           <button id="enroll-uri-submit" class="touch" type="button">Add</button>
+        </div>
+      </div>
+
+      <div class="enroll-pane hidden" data-step="file">
+        <p id="enroll-file-status">Pick a file containing one or more <code>otpauth://</code> URIs (plaintext, one per line) or QR codes (PNG/JPG).</p>
+        <p id="enroll-file-error" class="status err hidden"></p>
+        <ul id="enroll-file-rows" class="enroll-file-rows hidden"></ul>
+        <p id="enroll-file-summary" class="status hidden"></p>
+        <div id="enroll-file-destroy-prompt" class="enroll-destroy hidden">
+          <p class="status warn">Overwrite and delete the source file? Filesystem-level secure deletion is unreliable on modern storage (CoW filesystems, journals, SSD wear leveling). The bytes may persist in fs metadata, snapshots, or unallocated blocks.</p>
+          <div class="row">
+            <button id="enroll-file-keep" type="button">Keep file</button>
+            <button id="enroll-file-destroy" class="touch" type="button">Overwrite and delete</button>
+          </div>
+        </div>
+        <div class="row" id="enroll-file-actions">
+          <button class="touch" data-back type="button">Back</button>
+          <button id="enroll-file-pick" class="touch" type="button">Pick a file</button>
+          <button id="enroll-file-submit" class="touch hidden" type="button">Add selected</button>
+          <button id="enroll-file-done" class="touch hidden" type="button">Done</button>
         </div>
       </div>
 

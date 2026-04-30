@@ -52,6 +52,10 @@ check: fmt-check lint test ## run fmt-check + lint + test (pre-PR gate)
 .PHONY: check-yubi
 check-yubi: check test-hw ## check + the hardware-gated tests; touch the YubiKey when prompted
 
+.PHONY: test-secrets
+test-secrets: ## generate /tmp/tocken-import-test.txt for smoke-testing the file picker
+	@scripts/gen-test-secrets.sh
+
 .PHONY: clean
 clean: ## cargo clean
 	cd $(TAURI_DIR) && cargo clean

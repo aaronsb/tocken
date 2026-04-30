@@ -164,8 +164,6 @@ impl Store {
         self.file.entries.push(entry);
     }
 
-    // TODO(#9): consumed by account management.
-    #[allow(dead_code)]
     pub fn remove_entry(&mut self, id: &str) -> bool {
         let before = self.file.entries.len();
         self.file.entries.retain(|e| e.id != id);
