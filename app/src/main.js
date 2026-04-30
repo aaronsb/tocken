@@ -285,7 +285,7 @@ function initWizard(root) {
 // Code panel state machine (issue #3)
 // ─────────────────────────────────────────────────────────────────────
 
-function initCodePanel(root) {
+async function initCodePanel(root) {
   const panes = {
     awaiting: root.querySelector('[data-state="awaiting-touch"]'),
     unlocked: root.querySelector('[data-state="unlocked"]'),
@@ -564,14 +564,15 @@ function initCodePanel(root) {
     });
   });
 
-  // Backend emits "window:shown" when the user clicks the tray icon
-  // to bring the popup up. initCodePanel runs once per page load
-  // (re-init only happens via window.location.reload, which discards
-  // the entire JS context), so the unlistener returned by listen()
-  // is held to the page's lifetime by design — no leak risk under
-  // current invariants. If we ever introduce a re-init path, capture
-  // the unlistener and call it before re-binding.
-  listen("window:shown", () => {
+  // Backend emits "window:shown" when the user clicks the tray icon.
+  // Awaited so the IPC subscription is in place before the visibility
+  // check below: without await, listen() returns a Promise and the
+  // subscription lands asynchronously — an Activate that fires during
+  // that gap drops the event and the panel never enters awaiting.
+  // initCodePanel runs once per page load (re-init only happens via
+  // window.location.reload, which discards the JS context), so the
+  // unlistener is held to the page's lifetime by design.
+  await listen("window:shown", () => {
     enterAwaiting();
   });
 
@@ -585,29 +586,28 @@ function initCodePanel(root) {
   //     prompting for another touch. Only fall back to enterAwaiting
   //     if the backend says the session is Locked.
   const win = window.__TAURI__.window.getCurrentWindow();
-  win.isVisible().then(async (visible) => {
-    if (!visible) return;
-    try {
-      const response = await invoke("get_codes");
-      if (response.kind === "Codes") {
-        subtitle.textContent = "unlocked";
-        revealBtn.classList.remove("hidden");
-        showPane("unlocked");
-        renderCodes(response.codes);
-        if (response.codes.length > 0) {
-          const minRemaining = Math.min(
-            ...response.codes.map((c) => c.time_remaining)
-          );
-          const ms = (minRemaining > 0 ? minRemaining : 1) * 1000 + 200;
-          refreshTimer = setTimeout(refreshCodes, ms);
-        }
-        return;
+  const visible = await win.isVisible();
+  if (!visible) return;
+  try {
+    const response = await invoke("get_codes");
+    if (response.kind === "Codes") {
+      subtitle.textContent = "unlocked";
+      revealBtn.classList.remove("hidden");
+      showPane("unlocked");
+      renderCodes(response.codes);
+      if (response.codes.length > 0) {
+        const minRemaining = Math.min(
+          ...response.codes.map((c) => c.time_remaining)
+        );
+        const ms = (minRemaining > 0 ? minRemaining : 1) * 1000 + 200;
+        refreshTimer = setTimeout(refreshCodes, ms);
       }
-    } catch (err) {
-      console.error("startup get_codes:", err);
+      return;
     }
-    enterAwaiting();
-  });
+  } catch (err) {
+    console.error("startup get_codes:", err);
+  }
+  enterAwaiting();
 }
 
 // Enrollment panel — source picker + paste-URI textarea + manual form.
