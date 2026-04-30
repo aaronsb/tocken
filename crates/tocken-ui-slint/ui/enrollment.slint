@@ -88,6 +88,14 @@ export component EnrollmentPane inherits VerticalBox {
                     AppState.enroll-error = "";
                 }
             }
+            Button {
+                text: "Clipboard";
+                primary: AppState.enroll-source == 3;
+                clicked => {
+                    AppState.enroll-source = 3;
+                    AppState.enroll-error = "";
+                }
+            }
         }
 
         // ---- paste ----
@@ -254,6 +262,81 @@ export component EnrollmentPane inherits VerticalBox {
             }
         }
 
+        // ---- clipboard image ----
+        //
+        // Reuses enroll-file-rows + the same Save pipeline. The only
+        // pane-local state is the loading flag for the read button;
+        // destroy-source isn't shown because there's no source path
+        // to delete. The decode pipeline (RGBA → decode_rgba →
+        // decode_payloads) shares the same FileRowPreview output the
+        // file picker uses, so the preview list is identical.
+
+        if AppState.enroll-source == 3: VerticalBox {
+            spacing: 6px;
+            Text {
+                text: "Read a QR-code image from the clipboard. Take a screenshot of the QR (or copy an image) first.";
+                font-size: 12px;
+                color: #888;
+                wrap: word-wrap;
+            }
+            HorizontalBox {
+                spacing: 6px;
+                Button {
+                    text: AppState.enroll-clipboard-loading ? "Reading…" : "Read clipboard";
+                    enabled: !AppState.enroll-clipboard-loading;
+                    clicked => { AppState.read-enroll-clipboard(); }
+                }
+                Rectangle { horizontal-stretch: 1; }
+            }
+            if AppState.enroll-file-rows.length > 0: VerticalBox {
+                spacing: 6px;
+                Text {
+                    text: AppState.enroll-file-valid + " ready, " + AppState.enroll-file-weak + " weak (off by default), " + AppState.enroll-file-error + " error";
+                    font-size: 11px;
+                    color: #b0b0b0;
+                }
+                Rectangle {
+                    height: 180px;
+                    background: #1a1a1a;
+                    border-radius: 4px;
+                    ScrollView {
+                        VerticalBox {
+                            spacing: 4px;
+                            padding: 8px;
+                            for row[i] in AppState.enroll-file-rows: HorizontalBox {
+                                spacing: 8px;
+                                if row.error == "": CheckBox {
+                                    checked: row.selected;
+                                    toggled => { AppState.toggle-file-row(i); }
+                                }
+                                if row.error != "": Text {
+                                    text: "✗";
+                                    color: #ff8080;
+                                    font-size: 13px;
+                                    vertical-alignment: center;
+                                }
+                                Text {
+                                    text: row.error != "" ? row.error : (row.issuer + "  " + row.account);
+                                    font-size: 12px;
+                                    color: row.error != "" ? #ff8080 : #d0d0d0;
+                                    wrap: word-wrap;
+                                    overflow: elide;
+                                    horizontal-stretch: 1;
+                                    vertical-alignment: center;
+                                }
+                                if row.weak-bits > 0 && row.error == "": Text {
+                                    text: "⚠ " + row.weak-bits + "b";
+                                    color: #e0c060;
+                                    font-size: 11px;
+                                    vertical-alignment: center;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         if AppState.enroll-error != "": Text {
             text: AppState.enroll-error;
             color: #ff8080;
@@ -271,7 +354,7 @@ export component EnrollmentPane inherits VerticalBox {
                 primary: true;
                 enabled: !AppState.enroll-saving;
                 clicked => {
-                    if AppState.enroll-source == 2 {
+                    if AppState.enroll-source == 2 || AppState.enroll-source == 3 {
                         AppState.save-enroll-file();
                     } else {
                         AppState.save-enroll();

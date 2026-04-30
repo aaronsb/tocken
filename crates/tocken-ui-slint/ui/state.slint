@@ -96,7 +96,7 @@ export global AppState {
     in-out property <string> action-toast: "";
 
     // ---- enrollment (mode = 3) ----
-    in-out property <int> enroll-source: 0;        // 0=paste, 1=manual, 2=file
+    in-out property <int> enroll-source: 0;        // 0=paste, 1=manual, 2=file, 3=clipboard
     in-out property <string> enroll-uri: "";
     in-out property <string> enroll-issuer: "";
     in-out property <string> enroll-account: "";
@@ -107,9 +107,12 @@ export global AppState {
     in-out property <bool> enroll-weak-prompt: false;
     in-out property <int> enroll-weak-bits: 0;
     in-out property <bool> enroll-saving: false;
-    // file source
+    // file + clipboard image sources both populate enroll-file-rows
+    // (same row shape; same Save pipeline). source-path is non-empty
+    // only for the file picker, which is what gates destroy-source.
     in-out property <string> enroll-file-path: "";
     in-out property <bool> enroll-file-loading: false;
+    in-out property <bool> enroll-clipboard-loading: false;
     in-out property <[FilePreviewRow]> enroll-file-rows: [];
     in-out property <int> enroll-file-valid: 0;
     in-out property <int> enroll-file-weak: 0;
@@ -133,6 +136,7 @@ export global AppState {
     callback save-enroll();
     callback save-enroll-force();
     callback choose-enroll-file();
+    callback read-enroll-clipboard();
     callback save-enroll-file();
     callback toggle-file-row(int);
     // Actions mode

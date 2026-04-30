@@ -36,6 +36,7 @@ pub(crate) fn wire_enroll(ui: &MainWindow, unlocked: SharedUnlocked) {
     wire_save_enroll(ui, unlocked.clone(), false);
     wire_save_enroll(ui, unlocked.clone(), true);
     wire_choose_enroll_file(ui);
+    wire_read_enroll_clipboard(ui);
     wire_save_enroll_file(ui, unlocked);
     wire_toggle_file_row(ui);
 }
@@ -78,6 +79,7 @@ fn clear_enroll_state(ui: &MainWindow) {
     state.set_enroll_saving(false);
     state.set_enroll_file_path("".into());
     state.set_enroll_file_loading(false);
+    state.set_enroll_clipboard_loading(false);
     state.set_enroll_file_rows(empty_file_rows());
     state.set_enroll_file_valid(0);
     state.set_enroll_file_weak(0);
@@ -251,56 +253,134 @@ fn wire_choose_enroll_file(ui: &MainWindow) {
                 let state = ui.global::<AppState>();
                 state.set_enroll_file_loading(false);
                 match outcome {
-                    Ok((path, rows)) => {
-                        state.set_enroll_file_path(path.into());
-                        let mut valid = 0;
-                        let mut weak = 0;
-                        let mut errors = 0;
-                        let display_rows: Vec<FilePreviewRow> = rows
-                            .into_iter()
-                            .map(|r| {
-                                let error_str = r.error.map(|e| e.to_string()).unwrap_or_default();
-                                let weak_bits = r.weak_bits.unwrap_or(0) as i32;
-                                let payload = r.payload.unwrap_or_default();
-                                let is_error = !error_str.is_empty();
-                                let is_weak = !is_error && weak_bits > 0;
-                                if is_error {
-                                    errors += 1;
-                                } else if is_weak {
-                                    weak += 1;
-                                } else {
-                                    valid += 1;
-                                }
-                                FilePreviewRow {
-                                    issuer: r.issuer.unwrap_or_default().into(),
-                                    account: r.account.unwrap_or_default().into(),
-                                    weak_bits,
-                                    error: error_str.into(),
-                                    payload: payload.into(),
-                                    // Default selection: strong+valid
-                                    // rows in. Weak rows require an
-                                    // explicit checkbox click to opt
-                                    // in. Error rows have no checkbox.
-                                    selected: !is_error && !is_weak,
-                                }
-                            })
-                            .collect();
-                        state.set_enroll_file_rows(ModelRc::new(VecModel::from(display_rows)));
-                        state.set_enroll_file_valid(valid);
-                        state.set_enroll_file_weak(weak);
-                        state.set_enroll_file_error(errors);
-                    }
-                    Err(msg) => {
-                        state.set_enroll_error(msg.into());
-                        state.set_enroll_file_rows(empty_file_rows());
-                        state.set_enroll_file_valid(0);
-                        state.set_enroll_file_weak(0);
-                        state.set_enroll_file_error(0);
-                    }
+                    Ok((path, rows)) => apply_decoded_rows(&state, path, rows),
+                    Err(msg) => clear_decoded_rows(&state, msg),
                 }
             });
         });
     });
+}
+
+/// Read a QR-bearing image from the OS clipboard and feed it through
+/// the same `decode_payloads` → `FileRowPreview` pipeline the file
+/// picker uses. The shared `enroll-file-rows` model + `save-enroll-file`
+/// commit path mean the only clipboard-specific state is the loading
+/// flag and the empty source path (which keeps destroy-source from
+/// firing on the saved entries).
+///
+/// The same `apply_decoded_rows` helper will serve the camera path
+/// in the next stage — `nokhwa` yields the same RGBA bytes per frame,
+/// so on a successful `decode_rgba` it would call right into here.
+fn wire_read_enroll_clipboard(ui: &MainWindow) {
+    let weak = ui.as_weak();
+    ui.global::<AppState>().on_read_enroll_clipboard(move || {
+        let Some(ui) = weak.upgrade() else {
+            return;
+        };
+        let state = ui.global::<AppState>();
+        state.set_enroll_clipboard_loading(true);
+        state.set_enroll_error("".into());
+
+        let weak_done = weak.clone();
+        thread::spawn(move || {
+            let outcome = grab_clipboard_image_rows();
+            let _ = slint::invoke_from_event_loop(move || {
+                let Some(ui) = weak_done.upgrade() else {
+                    return;
+                };
+                let state = ui.global::<AppState>();
+                state.set_enroll_clipboard_loading(false);
+                match outcome {
+                    // Empty path = no source file to delete; keeps
+                    // destroy-source inert for clipboard imports.
+                    Ok(rows) => apply_decoded_rows(&state, String::new(), rows),
+                    Err(msg) => clear_decoded_rows(&state, msg),
+                }
+            });
+        });
+    });
+}
+
+/// One-shot clipboard read on a worker thread. Friendly messages
+/// for the two failure modes a user is most likely to hit (no image
+/// on clipboard, no QR in the image); other arboard / decode errors
+/// fall through with their underlying detail.
+fn grab_clipboard_image_rows() -> Result<Vec<enroll::file::FileRowPreview>, String> {
+    let mut cb = arboard::Clipboard::new().map_err(|e| format!("clipboard: {e}"))?;
+    let img = cb.get_image().map_err(|e| match e {
+        arboard::Error::ContentNotAvailable => {
+            "Clipboard has no image. Take a screenshot of the QR (or copy an image), then try again."
+                .to_string()
+        }
+        other => format!("clipboard image: {other}"),
+    })?;
+    let payloads = enroll::qr::decode_rgba(img.width as u32, img.height as u32, &img.bytes)
+        .map_err(|e| match e {
+            enroll::qr::QrError::NoCodesFound => {
+                "No QR code found in the clipboard image.".to_string()
+            }
+            enroll::qr::QrError::QualityTooLow => {
+                "QR code in the clipboard image is too low-quality to read.".to_string()
+            }
+            other => format!("QR decode: {other}"),
+        })?;
+    Ok(enroll::file::decode_payloads(payloads))
+}
+
+/// Translate the core `FileRowPreview` (file picker + clipboard +
+/// future camera) into the Slint-shaped row model and tally the
+/// status counts. `source_path` is "" for non-file sources;
+/// destroy-source only fires when it's non-empty.
+fn apply_decoded_rows(
+    state: &AppState<'_>,
+    source_path: String,
+    rows: Vec<enroll::file::FileRowPreview>,
+) {
+    state.set_enroll_file_path(source_path.into());
+    let mut valid = 0i32;
+    let mut weak = 0i32;
+    let mut errors = 0i32;
+    let display_rows: Vec<FilePreviewRow> = rows
+        .into_iter()
+        .map(|r| {
+            let error_str = r.error.map(|e| e.to_string()).unwrap_or_default();
+            let weak_bits = r.weak_bits.unwrap_or(0) as i32;
+            let payload = r.payload.unwrap_or_default();
+            let is_error = !error_str.is_empty();
+            let is_weak = !is_error && weak_bits > 0;
+            if is_error {
+                errors += 1;
+            } else if is_weak {
+                weak += 1;
+            } else {
+                valid += 1;
+            }
+            FilePreviewRow {
+                issuer: r.issuer.unwrap_or_default().into(),
+                account: r.account.unwrap_or_default().into(),
+                weak_bits,
+                error: error_str.into(),
+                payload: payload.into(),
+                // Default selection: strong+valid rows in. Weak rows
+                // require an explicit checkbox click to opt in. Error
+                // rows have no checkbox.
+                selected: !is_error && !is_weak,
+            }
+        })
+        .collect();
+    state.set_enroll_file_rows(ModelRc::new(VecModel::from(display_rows)));
+    state.set_enroll_file_valid(valid);
+    state.set_enroll_file_weak(weak);
+    state.set_enroll_file_error(errors);
+}
+
+fn clear_decoded_rows(state: &AppState<'_>, error_msg: String) {
+    state.set_enroll_error(error_msg.into());
+    state.set_enroll_file_path("".into());
+    state.set_enroll_file_rows(empty_file_rows());
+    state.set_enroll_file_valid(0);
+    state.set_enroll_file_weak(0);
+    state.set_enroll_file_error(0);
 }
 
 fn wire_save_enroll_file(ui: &MainWindow, unlocked: SharedUnlocked) {
