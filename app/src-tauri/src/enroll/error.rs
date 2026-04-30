@@ -47,6 +47,17 @@ pub enum EnrollError {
     /// schema-supported but enrollment surfaces don't accept it yet.
     #[error("HOTP enrollment is not yet supported")]
     HotpNotSupported,
+
+    /// Tried to enroll while the session is locked. Frontend should
+    /// route to the unlock pane.
+    #[error("session is locked")]
+    Locked,
+
+    /// Re-encrypt or atomic-write failed at commit time. Wraps the
+    /// `StoreError` variant for log visibility but only surfaces a
+    /// generic message to the user; the entry was NOT added.
+    #[error("could not save: {detail}")]
+    SaveFailed { detail: String },
 }
 
 #[cfg(test)]
@@ -71,6 +82,10 @@ mod tests {
             },
             EnrollError::MigrationUriNotSupported,
             EnrollError::HotpNotSupported,
+            EnrollError::Locked,
+            EnrollError::SaveFailed {
+                detail: "io".into(),
+            },
         ];
         for c in &cases {
             let json =

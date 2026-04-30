@@ -285,7 +285,7 @@ function initWizard(root) {
 // Code panel state machine (issue #3)
 // ─────────────────────────────────────────────────────────────────────
 
-function initCodePanel(root) {
+async function initCodePanel(root) {
   const panes = {
     awaiting: root.querySelector('[data-state="awaiting-touch"]'),
     unlocked: root.querySelector('[data-state="unlocked"]'),
@@ -302,6 +302,9 @@ function initCodePanel(root) {
   const revealBtn = root.querySelector("#reveal-toggle");
   const subtitle = root.querySelector("#main-subtitle");
   const toast = document.querySelector("#code-toast");
+  const addBtn = root.querySelector("#add-account");
+  const emptyAddBtn = root.querySelector("#empty-add-account");
+  const enrollPanel = document.querySelector("#enroll");
 
   let revealed = false;
   let refreshTimer = null;
@@ -349,6 +352,7 @@ function initCodePanel(root) {
   const renderCodes = (codes) => {
     list.innerHTML = "";
     empty.classList.toggle("hidden", codes.length > 0);
+    addBtn.classList.toggle("hidden", codes.length === 0);
     for (const c of codes) {
       const li = document.createElement("li");
       li.dataset.id = c.id;
@@ -497,9 +501,34 @@ function initCodePanel(root) {
     await refreshCodes();
   };
 
+  const enroll = initEnrollPanel(enrollPanel, {
+    onCancel: () => {
+      enrollPanel.classList.add("hidden");
+      root.classList.remove("hidden");
+    },
+    onAdded: async () => {
+      enrollPanel.classList.add("hidden");
+      root.classList.remove("hidden");
+      flashToast("Account added");
+      await refreshCodes();
+    },
+  });
+
+  const showEnroll = () => {
+    if (refreshTimer) {
+      clearTimeout(refreshTimer);
+      refreshTimer = null;
+    }
+    root.classList.add("hidden");
+    enrollPanel.classList.remove("hidden");
+    enroll.reset();
+  };
+
   // Wire interactions
   retry.addEventListener("click", () => enterAwaiting());
   errorRetry.addEventListener("click", () => enterAwaiting());
+  addBtn.addEventListener("click", showEnroll);
+  emptyAddBtn.addEventListener("click", showEnroll);
 
   dismiss.addEventListener("click", async () => {
     if (refreshTimer) {
@@ -535,14 +564,15 @@ function initCodePanel(root) {
     });
   });
 
-  // Backend emits "window:shown" when the user clicks the tray icon
-  // to bring the popup up. initCodePanel runs once per page load
-  // (re-init only happens via window.location.reload, which discards
-  // the entire JS context), so the unlistener returned by listen()
-  // is held to the page's lifetime by design — no leak risk under
-  // current invariants. If we ever introduce a re-init path, capture
-  // the unlistener and call it before re-binding.
-  listen("window:shown", () => {
+  // Backend emits "window:shown" when the user clicks the tray icon.
+  // Awaited so the IPC subscription is in place before the visibility
+  // check below: without await, listen() returns a Promise and the
+  // subscription lands asynchronously — an Activate that fires during
+  // that gap drops the event and the panel never enters awaiting.
+  // initCodePanel runs once per page load (re-init only happens via
+  // window.location.reload, which discards the JS context), so the
+  // unlistener is held to the page's lifetime by design.
+  await listen("window:shown", () => {
     enterAwaiting();
   });
 
@@ -556,27 +586,208 @@ function initCodePanel(root) {
   //     prompting for another touch. Only fall back to enterAwaiting
   //     if the backend says the session is Locked.
   const win = window.__TAURI__.window.getCurrentWindow();
-  win.isVisible().then(async (visible) => {
-    if (!visible) return;
-    try {
-      const response = await invoke("get_codes");
-      if (response.kind === "Codes") {
-        subtitle.textContent = "unlocked";
-        revealBtn.classList.remove("hidden");
-        showPane("unlocked");
-        renderCodes(response.codes);
-        if (response.codes.length > 0) {
-          const minRemaining = Math.min(
-            ...response.codes.map((c) => c.time_remaining)
-          );
-          const ms = (minRemaining > 0 ? minRemaining : 1) * 1000 + 200;
-          refreshTimer = setTimeout(refreshCodes, ms);
-        }
-        return;
+  const visible = await win.isVisible();
+  if (!visible) return;
+  try {
+    const response = await invoke("get_codes");
+    if (response.kind === "Codes") {
+      subtitle.textContent = "unlocked";
+      revealBtn.classList.remove("hidden");
+      showPane("unlocked");
+      renderCodes(response.codes);
+      if (response.codes.length > 0) {
+        const minRemaining = Math.min(
+          ...response.codes.map((c) => c.time_remaining)
+        );
+        const ms = (minRemaining > 0 ? minRemaining : 1) * 1000 + 200;
+        refreshTimer = setTimeout(refreshCodes, ms);
       }
-    } catch (err) {
-      console.error("startup get_codes:", err);
+      return;
     }
-    enterAwaiting();
+  } catch (err) {
+    console.error("startup get_codes:", err);
+  }
+  enterAwaiting();
+}
+
+// Enrollment panel — source picker + paste-URI textarea + manual form.
+// Each source feeds the same backend pipeline: input goes through
+// validate, weak-secret check (ADR-101), then commit. The weak-secret
+// confirmation surface is an inline notice above the submit button —
+// per the user's UX guidance, informational and in-flow, not a modal
+// (and never shown during code display, only enrollment).
+function initEnrollPanel(root, { onCancel, onAdded }) {
+  const stepLabel = root.querySelector("#enroll-step-label");
+  const sourcePane = root.querySelector('[data-step="source-picker"]');
+  const pastePane = root.querySelector('[data-step="paste"]');
+  const manualPane = root.querySelector('[data-step="manual"]');
+
+  const uriInput = root.querySelector("#enroll-uri-input");
+  const uriError = root.querySelector("#enroll-uri-error");
+  const uriWeak = root.querySelector("#enroll-uri-weak");
+  const uriSubmit = root.querySelector("#enroll-uri-submit");
+
+  const manualForm = root.querySelector("#enroll-manual-form");
+  const manualError = root.querySelector("#enroll-manual-error");
+  const manualWeak = root.querySelector("#enroll-manual-weak");
+  const manualSubmit = root.querySelector("#enroll-manual-submit");
+
+  // Per-pane "weak-secret confirmed" flag. Cleared on every input
+  // change so a stale Use-anyway click can't ride past a typo.
+  let pasteForceWeak = false;
+  let manualForceWeak = false;
+
+  const labelMap = {
+    "source-picker": "choose source",
+    paste: "paste URI",
+    manual: "manual entry",
+  };
+
+  const showStep = (key) => {
+    [sourcePane, pastePane, manualPane].forEach((p) =>
+      p.classList.add("hidden")
+    );
+    if (key === "source-picker") sourcePane.classList.remove("hidden");
+    if (key === "paste") pastePane.classList.remove("hidden");
+    if (key === "manual") manualPane.classList.remove("hidden");
+    stepLabel.textContent = labelMap[key] || "";
+  };
+
+  const reset = () => {
+    showStep("source-picker");
+    uriInput.value = "";
+    uriError.classList.add("hidden");
+    uriWeak.classList.add("hidden");
+    uriSubmit.textContent = "Add";
+    pasteForceWeak = false;
+    manualForm.reset();
+    manualError.classList.add("hidden");
+    manualWeak.classList.add("hidden");
+    manualSubmit.textContent = "Add";
+    manualForceWeak = false;
+  };
+
+  // Surface an EnrollError onto a paste/manual error+weak pair.
+  // Returns true if the error was a WeakSecret notice (caller should
+  // flip the local force flag and update the submit label).
+  const renderError = (err, errorEl, weakEl, submitEl) => {
+    errorEl.classList.add("hidden");
+    weakEl.classList.add("hidden");
+    if (err && err.kind === "weak_secret") {
+      weakEl.textContent =
+        `This service issues a non-standard short secret (${err.bits} bits, ` +
+        "less than the 128-bit RFC minimum). tocken cannot lengthen it. " +
+        "Most authenticators accept these. Use anyway?";
+      weakEl.classList.remove("hidden");
+      submitEl.textContent = "Use anyway";
+      return true;
+    }
+    if (err && err.kind === "locked") {
+      errorEl.textContent = "Session re-locked. Close this and unlock again.";
+    } else if (err && err.kind === "save_failed") {
+      errorEl.textContent = `Could not save: ${err.detail || "unknown error"}`;
+    } else if (err && err.kind === "invalid_secret") {
+      errorEl.textContent = "Secret is not valid base32.";
+    } else if (err && err.kind === "invalid_digits") {
+      errorEl.textContent = `Digits must be 6, 7, or 8 (got ${err.digits}).`;
+    } else if (err && err.kind === "invalid_period") {
+      errorEl.textContent =
+        `Period must be between 1 and 86400 seconds (got ${err.period}).`;
+    } else if (err && err.kind === "missing_account") {
+      errorEl.textContent = "Account is required.";
+    } else if (err && err.kind === "invalid_uri") {
+      errorEl.textContent = `Could not parse URI: ${err.detail || "unknown"}`;
+    } else if (err && err.kind === "migration_uri_not_supported") {
+      errorEl.textContent =
+        "Google Authenticator export URIs (otpauth-migration://) are not yet supported.";
+    } else if (err && err.kind === "hotp_not_supported") {
+      errorEl.textContent = "HOTP enrollment is not yet supported.";
+    } else {
+      errorEl.textContent =
+        err && err.kind ? err.kind : String(err);
+    }
+    errorEl.classList.remove("hidden");
+    return false;
+  };
+
+  // Source picker
+  sourcePane.querySelectorAll("[data-source]").forEach((btn) =>
+    btn.addEventListener("click", () => {
+      showStep(btn.dataset.source);
+    })
+  );
+  root.querySelector("#enroll-cancel").addEventListener("click", () =>
+    onCancel()
+  );
+
+  // Back buttons return to picker
+  root.querySelectorAll("[data-back]").forEach((btn) =>
+    btn.addEventListener("click", () => reset())
+  );
+
+  // Clearing input invalidates a previous Use-anyway confirmation —
+  // require a fresh prompt if the secret bits changed.
+  uriInput.addEventListener("input", () => {
+    pasteForceWeak = false;
+    uriWeak.classList.add("hidden");
+    uriSubmit.textContent = "Add";
   });
+  manualForm.addEventListener("input", (e) => {
+    if (e.target.name === "secret") {
+      manualForceWeak = false;
+      manualWeak.classList.add("hidden");
+      manualSubmit.textContent = "Add";
+    }
+  });
+
+  // Paste-URI submit
+  uriSubmit.addEventListener("click", async () => {
+    const uri = uriInput.value.trim();
+    if (!uri) {
+      uriError.textContent = "Paste a URI first.";
+      uriError.classList.remove("hidden");
+      return;
+    }
+    try {
+      await invoke("enroll_uri", { uri, forceWeak: pasteForceWeak });
+      onAdded();
+    } catch (err) {
+      const becameWeak = renderError(err, uriError, uriWeak, uriSubmit);
+      if (becameWeak) pasteForceWeak = true;
+    }
+  });
+
+  // Manual-form submit
+  manualForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const data = new FormData(manualForm);
+    const form = {
+      issuer: (data.get("issuer") || "").trim(),
+      account: (data.get("account") || "").trim(),
+      secret: data.get("secret") || "",
+      digits: Number(data.get("digits")),
+      period: Number(data.get("period")),
+      algorithm: data.get("algorithm"),
+      kind: "totp",
+    };
+    try {
+      await invoke("enroll_manual", { form, forceWeak: manualForceWeak });
+      onAdded();
+    } catch (err) {
+      const becameWeak = renderError(
+        err,
+        manualError,
+        manualWeak,
+        manualSubmit
+      );
+      if (becameWeak) manualForceWeak = true;
+    }
+  });
+
+  // Cancel surfaces (Escape, etc.) — wired by the caller via reset
+  // before re-show, so just expose the lifecycle hook.
+  return {
+    reset,
+    cancel: () => onCancel(),
+  };
 }

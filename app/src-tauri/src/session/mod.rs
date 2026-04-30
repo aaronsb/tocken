@@ -49,6 +49,13 @@ impl Session {
         }
     }
 
+    /// Time the session was unlocked (unix seconds). Lets the caller
+    /// rebuild the `Session` view after a Store mutation while
+    /// preserving the existing re-lock countdown.
+    pub fn unlocked_at_unix(&self) -> u64 {
+        self.unlocked_at_unix
+    }
+
     /// Number of period boundaries crossed for entry `idx` since unlock.
     /// Counts crossings of `period`-aligned boundaries between
     /// `unlocked_at_unix` and `now_unix`.
