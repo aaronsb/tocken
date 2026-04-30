@@ -22,3 +22,10 @@ _Crypto choices, threat model, key management, memory hygiene_
 |-----|-------|--------|
 | [ADR-100](./security/ADR-100-encrypted-seed-store-format-and-recipient-model.md) | Encrypted seed store format and recipient model | Accepted |
 | [ADR-101](./security/ADR-101-totp-secret-length-compliance-posture.md) | TOTP secret-length compliance posture | Accepted |
+
+## System Architecture
+_Process architecture, IPC, native vs subprocess, dependencies_
+
+| ADR | Title | Status |
+|-----|-------|--------|
+| [ADR-300](./system/ADR-300-pivot-ui-framework-from-tauri-to-slint.md) | Pivot UI framework from Tauri to Slint | Draft |
