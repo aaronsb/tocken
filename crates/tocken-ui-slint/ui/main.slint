@@ -135,6 +135,12 @@ export component MainWindow inherits Window {
                 vertical-stretch: 1;
                 VerticalBox {
                     spacing: 6px;
+                    // Pack entries at the top with their preferred
+                    // height. Default `stretch` distributes leftover
+                    // vertical space across children, which with a
+                    // single entry visibly inflated the gap between
+                    // the code and its countdown bar.
+                    alignment: start;
 
                     if AppState.entries.length == 0: VerticalBox {
                         spacing: 6px;
