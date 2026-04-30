@@ -647,8 +647,14 @@ export function initEnrollPanel(root, { onCancel, onAdded }) {
     const ctx = camCanvas.getContext("2d");
     ctx.drawImage(camVideo, 0, 0);
 
+    // JPEG quality 0.85 — visually indistinguishable from raw and
+    // ~5-10× smaller than PNG. The IPC payload is a JS array of
+    // bytes (Tauri serializes invoke args as JSON), so payload size
+    // is the dominant cost on the JS-to-Rust hop. PNG encode itself
+    // also dwarfs JPEG encode at this resolution. QR detection works
+    // fine at this quality — rqrr only cares about the luma channel.
     const blob = await new Promise((resolve) =>
-      camCanvas.toBlob(resolve, "image/png")
+      camCanvas.toBlob(resolve, "image/jpeg", 0.85)
     );
     if (!blob) {
       showCamError("Could not encode captured frame.");
