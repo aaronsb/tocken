@@ -96,7 +96,7 @@ export global AppState {
     in-out property <string> action-toast: "";
 
     // ---- enrollment (mode = 3) ----
-    in-out property <int> enroll-source: 0;        // 0=paste, 1=manual, 2=file, 3=clipboard
+    in-out property <int> enroll-source: 0;        // 0=paste, 1=manual, 2=file, 3=clipboard, 4=camera
     in-out property <string> enroll-uri: "";
     in-out property <string> enroll-issuer: "";
     in-out property <string> enroll-account: "";
@@ -122,6 +122,13 @@ export global AppState {
     // under modern filesystem realities (CoW, journals, SSD wear
     // leveling) per `enroll::file::destroy_file`.
     in-out property <bool> enroll-destroy-source: false;
+    // Camera source: live preview frame + watch state. The frame is
+    // pushed by the camera worker thread on each PipeWire process
+    // callback (~30fps); status flips between hint text and "Got it."
+    // The reticle is a UI-only overlay, not a Rust-side concept.
+    in-out property <bool> enroll-camera-watching: false;
+    in-out property <string> enroll-camera-status: "";
+    in-out property <image> enroll-camera-frame;
 
     // ---- callbacks ----
     callback generate-passphrase();
@@ -137,6 +144,8 @@ export global AppState {
     callback save-enroll-force();
     callback choose-enroll-file();
     callback read-enroll-clipboard();
+    callback start-camera-watch();
+    callback stop-camera-watch();
     callback save-enroll-file();
     callback toggle-file-row(int);
     // Actions mode

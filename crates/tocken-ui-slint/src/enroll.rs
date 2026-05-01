@@ -10,14 +10,17 @@ use tocken_core::enroll::{self, EnrollError, EnrollForm};
 use tocken_core::session::Session;
 use tocken_core::store::format::{Algorithm, Entry, EntryKind};
 
+use crate::camera::{stop_camera_if_running, SharedCamera};
 use crate::code_panel::tick_codes;
 use crate::{AppState, FilePreviewRow, MainWindow, SharedUnlocked};
 
-pub(crate) fn wire_enroll(ui: &MainWindow, unlocked: SharedUnlocked) {
+pub(crate) fn wire_enroll(ui: &MainWindow, unlocked: SharedUnlocked, camera: SharedCamera) {
     {
         let weak = ui.as_weak();
+        let camera = camera.clone();
         ui.global::<AppState>().on_open_enroll(move || {
             if let Some(ui) = weak.upgrade() {
+                stop_camera_if_running(&camera);
                 clear_enroll_state(&ui);
                 ui.global::<AppState>().set_mode(3);
             }
@@ -25,7 +28,9 @@ pub(crate) fn wire_enroll(ui: &MainWindow, unlocked: SharedUnlocked) {
     }
     {
         let weak = ui.as_weak();
+        let camera = camera.clone();
         ui.global::<AppState>().on_cancel_enroll(move || {
+            stop_camera_if_running(&camera);
             if let Some(ui) = weak.upgrade() {
                 // Skip clear_enroll_state — state resets on the next
                 // `on_open_enroll`. See note in `wire_save_enroll`.
@@ -33,11 +38,11 @@ pub(crate) fn wire_enroll(ui: &MainWindow, unlocked: SharedUnlocked) {
             }
         });
     }
-    wire_save_enroll(ui, unlocked.clone(), false);
-    wire_save_enroll(ui, unlocked.clone(), true);
+    wire_save_enroll(ui, unlocked.clone(), false, camera.clone());
+    wire_save_enroll(ui, unlocked.clone(), true, camera.clone());
     wire_choose_enroll_file(ui);
     wire_read_enroll_clipboard(ui);
-    wire_save_enroll_file(ui, unlocked);
+    wire_save_enroll_file(ui, unlocked, camera);
     wire_toggle_file_row(ui);
 }
 
@@ -94,10 +99,18 @@ fn empty_file_rows() -> ModelRc<FilePreviewRow> {
 /// Wire either `on_save_enroll` (force_weak=false) or
 /// `on_save_enroll_force` (force_weak=true). Both share a body — only
 /// the flag passed to `vet_form` differs.
-fn wire_save_enroll(ui: &MainWindow, unlocked: SharedUnlocked, force_weak: bool) {
+fn wire_save_enroll(
+    ui: &MainWindow,
+    unlocked: SharedUnlocked,
+    force_weak: bool,
+    camera: SharedCamera,
+) {
     let weak = ui.as_weak();
     let unlocked = unlocked.clone();
     let handler = move || {
+        // Save shouldn't typically fire from the camera tab (that
+        // path goes through save-enroll-file), but guard anyway.
+        stop_camera_if_running(&camera);
         let Some(ui) = weak.upgrade() else {
             return;
         };
@@ -328,10 +341,11 @@ fn grab_clipboard_image_rows() -> Result<Vec<enroll::file::FileRowPreview>, Stri
 }
 
 /// Translate the core `FileRowPreview` (file picker + clipboard +
-/// future camera) into the Slint-shaped row model and tally the
-/// status counts. `source_path` is "" for non-file sources;
-/// destroy-source only fires when it's non-empty.
-fn apply_decoded_rows(
+/// camera) into the Slint-shaped row model and tally the status
+/// counts. `source_path` is "" for non-file sources; destroy-source
+/// only fires when it's non-empty. `pub(crate)` because the camera
+/// module pushes here on a successful per-frame decode.
+pub(crate) fn apply_decoded_rows(
     state: &AppState<'_>,
     source_path: String,
     rows: Vec<enroll::file::FileRowPreview>,
@@ -383,12 +397,15 @@ fn clear_decoded_rows(state: &AppState<'_>, error_msg: String) {
     state.set_enroll_file_error(0);
 }
 
-fn wire_save_enroll_file(ui: &MainWindow, unlocked: SharedUnlocked) {
+fn wire_save_enroll_file(ui: &MainWindow, unlocked: SharedUnlocked, camera: SharedCamera) {
     let weak = ui.as_weak();
     ui.global::<AppState>().on_save_enroll_file(move || {
         let Some(ui) = weak.upgrade() else {
             return;
         };
+        // Camera-tab saves: release the device before commit so the
+        // light goes off promptly. No-op for file/clipboard sources.
+        stop_camera_if_running(&camera);
         let state = ui.global::<AppState>();
         state.set_enroll_error("".into());
         state.set_enroll_saving(true);

@@ -42,6 +42,7 @@ use slint::ComponentHandle;
 use tocken_core::session::Session;
 use tocken_core::store::{Store, StorePaths};
 
+mod camera;
 mod code_panel;
 mod enroll;
 mod wizard;
@@ -70,6 +71,7 @@ pub(crate) fn now_unix() -> u64 {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let ui = MainWindow::new()?;
     let unlocked: SharedUnlocked = Arc::new(Mutex::new(None));
+    let camera_session = camera::new_shared();
 
     populate_paths_and_mode(&ui);
     wizard::wire_passphrase(&ui);
@@ -79,7 +81,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     wizard::wire_finalize(&ui);
     code_panel::wire_unlock(&ui, unlocked.clone());
     code_panel::wire_lock(&ui, unlocked.clone());
-    enroll::wire_enroll(&ui, unlocked.clone());
+    enroll::wire_enroll(&ui, unlocked.clone(), camera_session.clone());
+    camera::wire_camera(&ui, camera_session);
     code_panel::wire_actions(&ui, unlocked.clone());
 
     // 1Hz tick: refresh codes + check should_relock. Kept in scope

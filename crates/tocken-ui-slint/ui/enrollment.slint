@@ -68,6 +68,9 @@ export component EnrollmentPane inherits VerticalBox {
                 text: "Paste URI";
                 primary: AppState.enroll-source == 0;
                 clicked => {
+                    if (AppState.enroll-camera-watching) {
+                        AppState.stop-camera-watch();
+                    }
                     AppState.enroll-source = 0;
                     AppState.enroll-error = "";
                 }
@@ -76,6 +79,9 @@ export component EnrollmentPane inherits VerticalBox {
                 text: "Manual";
                 primary: AppState.enroll-source == 1;
                 clicked => {
+                    if (AppState.enroll-camera-watching) {
+                        AppState.stop-camera-watch();
+                    }
                     AppState.enroll-source = 1;
                     AppState.enroll-error = "";
                 }
@@ -84,6 +90,9 @@ export component EnrollmentPane inherits VerticalBox {
                 text: "File";
                 primary: AppState.enroll-source == 2;
                 clicked => {
+                    if (AppState.enroll-camera-watching) {
+                        AppState.stop-camera-watch();
+                    }
                     AppState.enroll-source = 2;
                     AppState.enroll-error = "";
                 }
@@ -92,7 +101,18 @@ export component EnrollmentPane inherits VerticalBox {
                 text: "Clipboard";
                 primary: AppState.enroll-source == 3;
                 clicked => {
+                    if (AppState.enroll-camera-watching) {
+                        AppState.stop-camera-watch();
+                    }
                     AppState.enroll-source = 3;
+                    AppState.enroll-error = "";
+                }
+            }
+            Button {
+                text: "Camera";
+                primary: AppState.enroll-source == 4;
+                clicked => {
+                    AppState.enroll-source = 4;
                     AppState.enroll-error = "";
                 }
             }
@@ -337,6 +357,116 @@ export component EnrollmentPane inherits VerticalBox {
             }
         }
 
+        // ---- camera image ----
+        //
+        // Live preview of the webcam frame with a centered reticle
+        // overlay. The decode pipeline auto-stops the stream the
+        // moment a QR is recognized — no manual capture button.
+        // Status text drives the user's expectations: hint text
+        // while watching, "Got it." on success.
+
+        if AppState.enroll-source == 4: VerticalBox {
+            spacing: 6px;
+            Text {
+                text: AppState.enroll-camera-status != ""
+                    ? AppState.enroll-camera-status
+                    : "Click below, then hold a QR code inside the box. The first clean decode wins and the camera releases.";
+                font-size: 12px;
+                color: #b0b0b0;
+                wrap: word-wrap;
+                horizontal-alignment: center;
+            }
+            // Square preview area. The Image element scales the
+            // 640x480 frame to fit; the reticle Rectangle is sized
+            // and centered relative to the same parent so it lines
+            // up regardless of preview dimensions.
+            Rectangle {
+                preferred-width: 360px;
+                preferred-height: 360px;
+                background: #1a1a1a;
+                border-radius: 4px;
+                Image {
+                    source: AppState.enroll-camera-frame;
+                    width: parent.width;
+                    height: parent.height;
+                    image-fit: contain;
+                }
+                // Reticle: 60% of the smaller dimension, blue
+                // outline, no fill.
+                Rectangle {
+                    width: min(parent.width, parent.height) * 0.6;
+                    height: self.width;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    background: transparent;
+                    border-color: #4a90e2;
+                    border-width: 2px;
+                    border-radius: 4px;
+                }
+            }
+            HorizontalBox {
+                spacing: 6px;
+                Rectangle { horizontal-stretch: 1; }
+                if !AppState.enroll-camera-watching: Button {
+                    text: "Watch for QR code";
+                    primary: true;
+                    clicked => { AppState.start-camera-watch(); }
+                }
+                if AppState.enroll-camera-watching: Button {
+                    text: "Stop";
+                    clicked => { AppState.stop-camera-watch(); }
+                }
+                Rectangle { horizontal-stretch: 1; }
+            }
+            if AppState.enroll-file-rows.length > 0: VerticalBox {
+                spacing: 6px;
+                Text {
+                    text: AppState.enroll-file-valid + " ready, " + AppState.enroll-file-weak + " weak (off by default), " + AppState.enroll-file-error + " error";
+                    font-size: 11px;
+                    color: #b0b0b0;
+                }
+                Rectangle {
+                    height: 120px;
+                    background: #1a1a1a;
+                    border-radius: 4px;
+                    ScrollView {
+                        VerticalBox {
+                            spacing: 4px;
+                            padding: 8px;
+                            for row[i] in AppState.enroll-file-rows: HorizontalBox {
+                                spacing: 8px;
+                                if row.error == "": CheckBox {
+                                    checked: row.selected;
+                                    toggled => { AppState.toggle-file-row(i); }
+                                }
+                                if row.error != "": Text {
+                                    text: "✗";
+                                    color: #ff8080;
+                                    font-size: 13px;
+                                    vertical-alignment: center;
+                                }
+                                Text {
+                                    text: row.error != "" ? row.error : (row.issuer + "  " + row.account);
+                                    font-size: 12px;
+                                    color: row.error != "" ? #ff8080 : #d0d0d0;
+                                    wrap: word-wrap;
+                                    overflow: elide;
+                                    horizontal-stretch: 1;
+                                    vertical-alignment: center;
+                                }
+                                if row.weak-bits > 0 && row.error == "": Text {
+                                    text: "⚠ " + row.weak-bits + "b";
+                                    color: #e0c060;
+                                    font-size: 11px;
+                                    vertical-alignment: center;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         if AppState.enroll-error != "": Text {
             text: AppState.enroll-error;
             color: #ff8080;
@@ -354,7 +484,12 @@ export component EnrollmentPane inherits VerticalBox {
                 primary: true;
                 enabled: !AppState.enroll-saving;
                 clicked => {
-                    if AppState.enroll-source == 2 || AppState.enroll-source == 3 {
+                    // Sources 2 (file), 3 (clipboard), 4 (camera)
+                    // all populate enroll-file-rows and dispatch
+                    // through the same multi-row commit path.
+                    if AppState.enroll-source == 2
+                        || AppState.enroll-source == 3
+                        || AppState.enroll-source == 4 {
                         AppState.save-enroll-file();
                     } else {
                         AppState.save-enroll();
