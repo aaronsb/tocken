@@ -50,11 +50,20 @@ use pipewire as pw;
 use pw::properties::properties;
 use pw::spa;
 use pw::spa::pod::Pod;
-use slint::{ComponentHandle, Image, Rgba8Pixel, SharedPixelBuffer};
+use slint::{ComponentHandle, Image, ModelRc, Rgba8Pixel, SharedPixelBuffer, VecModel};
 
 use tocken_core::enroll;
 
+use crate::FilePreviewRow;
+
 use crate::{enroll as enroll_mod, AppState, MainWindow};
+
+/// Side length of the reticle as a fraction of the smaller frame
+/// dimension. Decode runs only on this centered square ROI; the
+/// Slint side draws the same ratio so the visual reticle and the
+/// decode region match 1:1 in source coordinates. Both ends must
+/// agree — keep them in sync if you change either.
+const RETICLE_RATIO: f32 = 0.8;
 
 /// Per-app shared handle on the active camera session. `None` when
 /// the camera isn't running. Held in a `Mutex` so start/stop from
@@ -123,6 +132,14 @@ fn start_session(ui: &MainWindow, camera: &SharedCamera) {
     state.set_enroll_camera_watching(true);
     state.set_enroll_camera_status("Hold a QR code in front of the camera…".into());
     state.set_enroll_error("".into());
+    // Clear any rows from a previous decode — otherwise the rows
+    // preview block stays visible, layout reflows around it, and
+    // the camera preview shrinks. Also avoids the user accidentally
+    // committing stale entries from the prior session.
+    state.set_enroll_file_rows(ModelRc::new(VecModel::from(Vec::<FilePreviewRow>::new())));
+    state.set_enroll_file_valid(0);
+    state.set_enroll_file_weak(0);
+    state.set_enroll_file_error(0);
 
     *guard = Some(CameraSession { stop });
     drop(guard);
@@ -184,6 +201,17 @@ struct UserData {
     stop: Arc<AtomicBool>,
     mainloop: pw::main_loop::MainLoopRc,
     decoded: bool,
+    /// Frame counter for the periodic stderr diagnostic. Reset
+    /// every report so the printed value is "frames since last log",
+    /// not "frames since startup" — easier to read at a glance.
+    frames_since_log: u64,
+    /// Most recent non-`NoCodesFound` decode error, surfaced in the
+    /// periodic log. `NoCodesFound` is the silent-OK path (typical
+    /// for frames without a QR); anything else means rqrr saw a
+    /// pattern but couldn't read it (focus / quality / contrast).
+    last_decode_err: Option<String>,
+    /// One-shot first-frame log gate.
+    diagnosed: bool,
 }
 
 fn run_camera_loop(stop: Arc<AtomicBool>, weak: slint::Weak<MainWindow>) -> Result<(), String> {
@@ -217,6 +245,9 @@ fn run_camera_loop(stop: Arc<AtomicBool>, weak: slint::Weak<MainWindow>) -> Resu
         stop,
         mainloop: mainloop.clone(),
         decoded: false,
+        frames_since_log: 0,
+        last_decode_err: None,
+        diagnosed: false,
     };
 
     let _listener = stream
@@ -301,12 +332,48 @@ fn run_camera_loop(stop: Arc<AtomicBool>, weak: slint::Weak<MainWindow>) -> Resu
                 luma.push(c[0]);
             }
 
+            if !ud.diagnosed {
+                ud.diagnosed = true;
+                let head: Vec<u8> = luma[..luma.len().min(8)].to_vec();
+                eprintln!(
+                    "[camera] first frame: format={:?} {w}x{h} chunk_size={chunk_size} luma_len={} luma_head={head:02x?}",
+                    ud.format.format(),
+                    luma.len(),
+                );
+            }
+
             push_preview(&ud.weak, w, h, &luma);
 
-            if let Ok(payloads) = enroll::qr::decode_grayscale(w, h, &luma) {
-                ud.decoded = true;
-                push_decode_success(&ud.weak, payloads);
-                ud.mainloop.quit();
+            // Crop to the reticle ROI before decoding. Cuts work
+            // by ~50% (384x384 vs 640x480 for our YUY2 frame) and
+            // ignores background QRs (sticker on the wall, etc.)
+            // so the user's framing intent is honored. The Slint
+            // reticle draws the same ratio so it lines up.
+            let (rx, ry, rw, rh) = reticle_roi(w, h);
+            let cropped = crop_luma(&luma, w, rx, ry, rw, rh);
+
+            match enroll::qr::decode_grayscale(rw, rh, &cropped) {
+                Ok(payloads) => {
+                    ud.decoded = true;
+                    push_decode_success(&ud.weak, payloads);
+                    ud.mainloop.quit();
+                }
+                Err(enroll::qr::QrError::NoCodesFound) => {
+                    // Silent — most frames don't have a QR.
+                }
+                Err(e) => {
+                    ud.last_decode_err = Some(format!("{e}"));
+                }
+            }
+
+            ud.frames_since_log += 1;
+            if ud.frames_since_log >= 30 {
+                eprintln!(
+                    "[camera] {} frames decoded; last non-NoCodesFound err: {:?}",
+                    ud.frames_since_log, ud.last_decode_err
+                );
+                ud.frames_since_log = 0;
+                ud.last_decode_err = None;
             }
         })
         .register()
@@ -333,6 +400,27 @@ fn run_camera_loop(stop: Arc<AtomicBool>, weak: slint::Weak<MainWindow>) -> Resu
 
     mainloop.run();
     Ok(())
+}
+
+/// Centered square ROI in source coordinates: side = `RETICLE_RATIO`
+/// of the smaller dimension. Returns `(x, y, w, h)`.
+fn reticle_roi(w: u32, h: u32) -> (u32, u32, u32, u32) {
+    let side = ((w.min(h)) as f32 * RETICLE_RATIO) as u32;
+    let x = w.saturating_sub(side) / 2;
+    let y = h.saturating_sub(side) / 2;
+    (x, y, side, side)
+}
+
+/// Row-by-row copy of a sub-region from a row-major luma buffer.
+/// Caller must guarantee `x + cw <= w` and `y + ch <= h` and that
+/// `luma.len() >= w * (y + ch)`.
+fn crop_luma(luma: &[u8], w: u32, x: u32, y: u32, cw: u32, ch: u32) -> Vec<u8> {
+    let mut out = Vec::with_capacity((cw * ch) as usize);
+    for row in y..y + ch {
+        let start = (row * w + x) as usize;
+        out.extend_from_slice(&luma[start..start + cw as usize]);
+    }
+    out
 }
 
 /// Per-frame preview push. Builds a grayscale-as-RGBA pixel buffer
