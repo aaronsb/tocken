@@ -4,9 +4,11 @@
 //!
 //! Plaintext: one `otpauth://...` URI per line (matches the legacy
 //! bash CLI's `secrets.txt`). Empty lines and lines with leading `#`
-//! are skipped. Migration URIs (`otpauth-migration://`) parse as
-//! `MigrationUriNotSupported` per-row errors — when #7 lands the row
-//! state model is unchanged, only the UI's handling of that error.
+//! are skipped. `otpauth-migration://` URIs (Google Authenticator
+//! export QRs) expand into one row per embedded entry via
+//! `enroll::migration::parse_otpauth_migration_uri`, so a single
+//! batch QR shows up as N rows the user can review and selectively
+//! commit (#7).
 //!
 //! The preview returns the raw payload alongside the decoded fields
 //! so the frontend can echo selected payloads back to the commit
@@ -22,6 +24,7 @@ use secrecy::ExposeSecret;
 use serde::Serialize;
 
 use super::error::EnrollError;
+use super::migration::parse_otpauth_migration_uri;
 use super::parse::parse_otpauth_uri;
 use super::qr::{decode_image_bytes, QrError};
 use super::{normalize_secret, validate};
@@ -128,11 +131,53 @@ pub fn decode_file(path: &Path) -> Result<Vec<FileRowPreview>, FileError> {
 }
 
 /// Wrap raw decoded payloads into `FileRowPreview`s. Shared by the
-/// file-picker path (after `decode_file`) and the clipboard-image
-/// path (after `qr::decode_image_bytes`) — same row state machine,
-/// different upstreams.
+/// file-picker path (after `decode_file`), the clipboard-image path
+/// (after `qr::decode_image_bytes`), and the camera path (after
+/// `qr::decode_grayscale`) — same row state machine, different
+/// upstreams.
+///
+/// `otpauth-migration://` payloads expand into N rows, one per
+/// embedded entry, by synthesizing a standard `otpauth://` URI for
+/// each and feeding it through the same `payload_to_row` pipeline
+/// the rest of enrollment uses. That keeps validate + weak-check +
+/// commit identical to single-URI imports — no parallel code path.
 pub fn decode_payloads(payloads: Vec<String>) -> Vec<FileRowPreview> {
-    payloads.into_iter().map(payload_to_row).collect()
+    let mut rows = Vec::with_capacity(payloads.len());
+    for payload in payloads {
+        let trimmed = payload.trim_start();
+        if trimmed.starts_with("otpauth-migration://") {
+            match parse_otpauth_migration_uri(trimmed) {
+                Ok(entries) => {
+                    for entry in entries {
+                        match entry {
+                            Ok(synth_uri) => rows.push(payload_to_row(synth_uri)),
+                            Err(err) => rows.push(error_row(&payload, err)),
+                        }
+                    }
+                }
+                Err(err) => rows.push(error_row(&payload, err)),
+            }
+        } else {
+            rows.push(payload_to_row(payload));
+        }
+    }
+    rows
+}
+
+/// Build a row that carries only an error — used when a payload
+/// can't even be split into per-entry attempts (whole-payload
+/// failures like a malformed migration envelope).
+fn error_row(payload: &str, err: EnrollError) -> FileRowPreview {
+    FileRowPreview {
+        source: truncate_for_display(payload, 80),
+        payload: None,
+        issuer: None,
+        account: None,
+        digits: None,
+        period: None,
+        error: Some(err),
+        weak_bits: None,
+    }
 }
 
 /// Securely overwrite `path` with zeros, fsync, then unlink. Best-
@@ -298,11 +343,61 @@ mod tests {
             Some(EnrollError::InvalidUri { .. })
         ));
 
-        // Migration URI surfaces as a per-row error pointing at #7.
+        // Malformed migration URI: base64 doesn't decode to a valid
+        // protobuf, so the whole-payload parse fails and surfaces as
+        // a single MigrationDecodeFailed row.
         assert!(matches!(
             rows[3].error,
-            Some(EnrollError::MigrationUriNotSupported)
+            Some(EnrollError::MigrationDecodeFailed { .. })
         ));
+    }
+
+    #[test]
+    fn migration_uri_expands_to_one_row_per_entry() {
+        use base64::{engine::general_purpose, Engine as _};
+        use prost::Message;
+
+        // Build a 3-entry migration payload directly (no separate
+        // helper to drag into this test module).
+        let make_entry =
+            |name: &str, issuer: &str| crate::enroll::migration::proto::OtpParameters {
+                secret: b"01234567890123456789".to_vec(),
+                name: name.into(),
+                issuer: issuer.into(),
+                algorithm: 1, // SHA1
+                digits: 1,    // SIX
+                r#type: 2,    // TOTP
+                counter: 0,
+            };
+        let payload = crate::enroll::migration::proto::MigrationPayload {
+            otp_parameters: vec![
+                make_entry("alice", "A"),
+                make_entry("bob", "B"),
+                make_entry("charlie", "C"),
+            ],
+            version: 1,
+            batch_size: 1,
+            batch_index: 0,
+            batch_id: 1,
+        };
+        let bytes = payload.encode_to_vec();
+        let b64 = general_purpose::URL_SAFE.encode(&bytes);
+        let uri = format!("otpauth-migration://offline?data={b64}\n");
+
+        let mut tmp = NamedTempFile::new().unwrap();
+        write!(tmp, "{uri}").unwrap();
+        tmp.as_file_mut().sync_all().unwrap();
+
+        let rows = decode_file(tmp.path()).expect("decode");
+        assert_eq!(rows.len(), 3, "one row per entry in the migration batch");
+        for (i, want) in ["alice", "bob", "charlie"].iter().enumerate() {
+            assert!(
+                rows[i].error.is_none(),
+                "row {i} should be a valid entry, got error: {:?}",
+                rows[i].error
+            );
+            assert_eq!(rows[i].account.as_deref(), Some(*want));
+        }
     }
 
     #[test]
