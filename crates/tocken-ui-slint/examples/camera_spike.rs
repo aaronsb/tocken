@@ -29,6 +29,10 @@ use tocken_core::enroll::qr;
 struct UserData {
     format: spa::param::video::VideoInfoRaw,
     decoded: bool,
+    /// First-frame diagnostics flag — print buffer shape exactly once
+    /// so we can debug format-vs-data mismatch (e.g. negotiated YUY2
+    /// but source actually delivering MJPEG).
+    diagnosed: bool,
     /// Cloned mainloop so the process callback can quit on first decode.
     /// MainLoopRc is Rc-counted internally; cheap to clone.
     mainloop: pw::main_loop::MainLoopRc,
@@ -66,6 +70,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let user_data = UserData {
         format: Default::default(),
         decoded: false,
+        diagnosed: false,
         mainloop: mainloop.clone(),
     };
 
@@ -74,7 +79,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .state_changed(|_, _, old, new| {
             println!("Stream state: {:?} -> {:?}", old, new);
         })
-        .param_changed(|_, ud, id, param| {
+        .param_changed(|stream, ud, id, param| {
             let Some(param) = param else {
                 return;
             };
@@ -92,14 +97,44 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ud.format
                 .parse(param)
                 .expect("parse VideoInfoRaw");
+            let w = ud.format.size().width;
+            let h = ud.format.size().height;
             println!(
                 "Negotiated format: {:?} {}x{} @ {}/{} fps",
                 ud.format.format(),
-                ud.format.size().width,
-                ud.format.size().height,
+                w,
+                h,
                 ud.format.framerate().num,
                 ud.format.framerate().denom.max(1),
             );
+
+            // Push a Buffers param response so the source knows what
+            // kind of buffers we'll accept. v4l2 sources won't transition
+            // out of Paused without this — they error on use_buffers
+            // because their default DmaBuf preference doesn't match our
+            // MAP_BUFFERS flag.
+            //
+            // YUYV is 2 bytes per pixel.
+            let stride = (w * 2) as i32;
+            let size = stride * h as i32;
+            let buffers_pod = build_buffers_pod(stride, size);
+            let pod_bytes: Vec<u8> = match spa::pod::serialize::PodSerializer::serialize(
+                std::io::Cursor::new(Vec::new()),
+                &spa::pod::Value::Object(buffers_pod),
+            ) {
+                Ok((cursor, _size)) => cursor.into_inner(),
+                Err(e) => {
+                    eprintln!("buffers pod serialize: {e}");
+                    return;
+                }
+            };
+            let Some(pod) = Pod::from_bytes(&pod_bytes) else {
+                eprintln!("buffers pod from_bytes: invalid");
+                return;
+            };
+            if let Err(e) = stream.update_params(&mut [pod]) {
+                eprintln!("update_params: {e}");
+            }
         })
         .process(|stream, ud| {
             if ud.decoded {
@@ -112,11 +147,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if datas.is_empty() {
                 return;
             }
+            let n_planes = datas.len();
             let chunk_size = datas[0].chunk().size() as usize;
             let chunk_offset = datas[0].chunk().offset() as usize;
+            let chunk_stride = datas[0].chunk().stride();
+            let data_type = datas[0].type_();
             let Some(buf) = datas[0].data() else {
                 return;
             };
+            if !ud.diagnosed {
+                ud.diagnosed = true;
+                let mmap_len = buf.len();
+                let head: Vec<u8> = buf[..mmap_len.min(16)].to_vec();
+                println!(
+                    "FIRST FRAME: planes={n_planes} data[0]: type={data_type:?} mmap_len={mmap_len} chunk(size={chunk_size}, offset={chunk_offset}, stride={chunk_stride}) head={head:02x?}"
+                );
+            }
             if chunk_size == 0 || chunk_offset + chunk_size > buf.len() {
                 return;
             }
@@ -172,10 +218,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         })
         .register()?;
 
-    // Format negotiation pod. Offer multiple video formats; let
-    // PipeWire pick whichever the camera supports. Range the size so
-    // we don't reject a camera with native 720p / 1080p; cap at 4K
-    // for sanity.
+    // Format negotiation pod. Pin to YUY2 640x480 @ 30fps — the
+    // camera tested with (OBSBOT Meet 2) exposes raw YUYV only at
+    // 640x360 and 640x480 (anything larger is MJPG, which would
+    // need on-the-fly JPEG decode per frame). 640x480 has
+    // 76,800 luma samples — enormous overprovisioning for a QR.
+    // Production camera.rs should broaden this; this is a spike.
     let format_pod = spa::pod::object!(
         spa::utils::SpaTypes::ObjectParamFormat,
         spa::param::ParamType::EnumFormat,
@@ -191,41 +239,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ),
         spa::pod::property!(
             spa::param::format::FormatProperties::VideoFormat,
-            Choice,
-            Enum,
             Id,
-            spa::param::video::VideoFormat::YUY2,
-            spa::param::video::VideoFormat::YUY2,
-            spa::param::video::VideoFormat::I420,
-            spa::param::video::VideoFormat::RGBA,
-            spa::param::video::VideoFormat::RGBx,
+            spa::param::video::VideoFormat::YUY2
         ),
         spa::pod::property!(
             spa::param::format::FormatProperties::VideoSize,
-            Choice,
-            Range,
             Rectangle,
             spa::utils::Rectangle {
-                width: 1280,
-                height: 720
-            },
-            spa::utils::Rectangle {
-                width: 320,
-                height: 240
-            },
-            spa::utils::Rectangle {
-                width: 3840,
-                height: 2160
+                width: 640,
+                height: 480
             }
         ),
         spa::pod::property!(
             spa::param::format::FormatProperties::VideoFramerate,
-            Choice,
-            Range,
             Fraction,
-            spa::utils::Fraction { num: 30, denom: 1 },
-            spa::utils::Fraction { num: 1, denom: 1 },
-            spa::utils::Fraction { num: 60, denom: 1 }
+            spa::utils::Fraction { num: 30, denom: 1 }
         ),
     );
     let pod_bytes: Vec<u8> = spa::pod::serialize::PodSerializer::serialize(
@@ -248,4 +276,56 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("Spike done.");
     Ok(())
+}
+
+/// Build the SPA_TYPE_OBJECT_ParamBuffers pod that tells the source
+/// what buffer shape we accept. Without this the v4l2 source defaults
+/// to DmaBuf, which our MAP_BUFFERS stream flag can't auto-mmap, and
+/// the stream errors out on `use_buffers: -22`.
+///
+/// The libspa Rust crate doesn't expose a friendly enum for the
+/// BUFFERS_* property keys, so we hand-build the Object with raw
+/// `Property::new(spa_sys_const, Value::...)`.
+fn build_buffers_pod(stride: i32, size: i32) -> spa::pod::Object {
+    use pw::spa::pod::{ChoiceValue, Object, Property, Value};
+    use pw::spa::utils::{Choice, ChoiceEnum, ChoiceFlags};
+
+    let mempt_bit: i32 = 1 << pw::spa::sys::SPA_DATA_MemPtr;
+    let memfd_bit: i32 = 1 << pw::spa::sys::SPA_DATA_MemFd;
+
+    Object {
+        type_: spa::utils::SpaTypes::ObjectParamBuffers.as_raw(),
+        id: spa::param::ParamType::Buffers.as_raw(),
+        properties: vec![
+            // Number of buffers: prefer 8, accept 2..=32.
+            Property::new(
+                pw::spa::sys::SPA_PARAM_BUFFERS_buffers,
+                Value::Choice(ChoiceValue::Int(Choice::<i32>(
+                    ChoiceFlags::empty(),
+                    ChoiceEnum::<i32>::Range {
+                        default: 8,
+                        min: 2,
+                        max: 32,
+                    },
+                ))),
+            ),
+            // One contiguous block per buffer (no planar formats here).
+            Property::new(pw::spa::sys::SPA_PARAM_BUFFERS_blocks, Value::Int(1)),
+            // Frame size: stride * height bytes.
+            Property::new(pw::spa::sys::SPA_PARAM_BUFFERS_size, Value::Int(size)),
+            Property::new(pw::spa::sys::SPA_PARAM_BUFFERS_stride, Value::Int(stride)),
+            // Accept MemPtr or MemFd data — both are mmap-friendly.
+            // Not declaring DmaBuf keeps the MAP_BUFFERS flag honest.
+            Property::new(
+                pw::spa::sys::SPA_PARAM_BUFFERS_dataType,
+                Value::Choice(ChoiceValue::Int(Choice::<i32>(
+                    ChoiceFlags::empty(),
+                    ChoiceEnum::<i32>::Flags {
+                        default: mempt_bit | memfd_bit,
+                        flags: vec![mempt_bit, memfd_bit],
+                    },
+                ))),
+            ),
+        ],
+    }
 }
