@@ -39,9 +39,17 @@ pub enum EnrollError {
     InvalidUri { detail: String },
 
     /// `otpauth-migration://` URI handed to a single-entry path.
-    /// Tracked separately under #7.
-    #[error("otpauth-migration:// URIs are not yet supported (tracked in #7)")]
+    /// The file/clipboard/camera path expands these via
+    /// `enroll::migration::parse_otpauth_migration_uri`; the paste-URI
+    /// path commits one form at a time and so still rejects them.
+    #[error("otpauth-migration:// URIs aren't accepted via paste — use file picker, clipboard, or camera")]
     MigrationUriNotSupported,
+
+    /// `otpauth-migration://` URI present, but the base64/protobuf
+    /// payload couldn't be decoded. Detail is non-secret (URL/encoding
+    /// shape, not the payload itself) so it's safe to surface.
+    #[error("could not decode otpauth-migration:// payload: {detail}")]
+    MigrationDecodeFailed { detail: String },
 
     /// `otpauth://` URI specified a `type` other than `totp`. HOTP is
     /// schema-supported but enrollment surfaces don't accept it yet.
@@ -81,6 +89,9 @@ mod tests {
                 detail: "bad".into(),
             },
             EnrollError::MigrationUriNotSupported,
+            EnrollError::MigrationDecodeFailed {
+                detail: "bad base64".into(),
+            },
             EnrollError::HotpNotSupported,
             EnrollError::Locked,
             EnrollError::SaveFailed {

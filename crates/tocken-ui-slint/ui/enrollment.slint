@@ -1,0 +1,506 @@
+import { Button, CheckBox, VerticalBox, HorizontalBox, LineEdit, ScrollView } from "std-widgets.slint";
+import { AppState } from "state.slint";
+
+// Mode = 3 enrollment flow: source picker (paste / manual / file)
+// → form → vet → save. Weak-secret confirmation is a typed sub-mode
+// that pre-empts the form when `enroll-weak-prompt` is true.
+export component EnrollmentPane inherits VerticalBox {
+    spacing: 10px;
+
+    // ---- weak-secret confirmation ----
+
+    if AppState.enroll-weak-prompt: VerticalBox {
+        spacing: 12px;
+        alignment: center;
+        Text {
+            text: "Weak secret";
+            font-size: 22px;
+            color: #f0f0f0;
+            horizontal-alignment: center;
+        }
+        Text {
+            text: "This secret has " + AppState.enroll-weak-bits + " bits of entropy, less than RFC 4226's 128-bit minimum. The code will still work but is more brute-forceable than recommended.";
+            font-size: 12px;
+            color: #b0b0b0;
+            wrap: word-wrap;
+            horizontal-alignment: center;
+        }
+        HorizontalBox {
+            spacing: 12px;
+            Button {
+                text: "Cancel";
+                clicked => { AppState.enroll-weak-prompt = false; }
+            }
+            Button {
+                text: "Use anyway";
+                primary: true;
+                clicked => {
+                    AppState.enroll-weak-prompt = false;
+                    AppState.save-enroll-force();
+                }
+            }
+        }
+    }
+
+    // ---- source picker + form ----
+
+    if !AppState.enroll-weak-prompt: VerticalBox {
+        spacing: 10px;
+
+        HorizontalBox {
+            spacing: 6px;
+            Text {
+                text: "Add entry";
+                font-size: 18px;
+                color: #f0f0f0;
+                vertical-alignment: center;
+            }
+            Rectangle { horizontal-stretch: 1; }
+            Button {
+                text: "Cancel";
+                clicked => { AppState.cancel-enroll(); }
+            }
+        }
+
+        HorizontalBox {
+            spacing: 6px;
+            Button {
+                text: "Paste URI";
+                primary: AppState.enroll-source == 0;
+                clicked => {
+                    if (AppState.enroll-camera-watching) {
+                        AppState.stop-camera-watch();
+                    }
+                    AppState.enroll-source = 0;
+                    AppState.enroll-error = "";
+                }
+            }
+            Button {
+                text: "Manual";
+                primary: AppState.enroll-source == 1;
+                clicked => {
+                    if (AppState.enroll-camera-watching) {
+                        AppState.stop-camera-watch();
+                    }
+                    AppState.enroll-source = 1;
+                    AppState.enroll-error = "";
+                }
+            }
+            Button {
+                text: "File";
+                primary: AppState.enroll-source == 2;
+                clicked => {
+                    if (AppState.enroll-camera-watching) {
+                        AppState.stop-camera-watch();
+                    }
+                    AppState.enroll-source = 2;
+                    AppState.enroll-error = "";
+                }
+            }
+            Button {
+                text: "Clipboard";
+                primary: AppState.enroll-source == 3;
+                clicked => {
+                    if (AppState.enroll-camera-watching) {
+                        AppState.stop-camera-watch();
+                    }
+                    AppState.enroll-source = 3;
+                    AppState.enroll-error = "";
+                }
+            }
+            Button {
+                text: "Camera";
+                primary: AppState.enroll-source == 4;
+                clicked => {
+                    AppState.enroll-source = 4;
+                    AppState.enroll-error = "";
+                }
+            }
+        }
+
+        // ---- paste ----
+
+        if AppState.enroll-source == 0: VerticalBox {
+            spacing: 6px;
+            Text {
+                text: "Paste an otpauth:// URI.";
+                font-size: 12px;
+                color: #888;
+            }
+            LineEdit {
+                placeholder-text: "otpauth://totp/Issuer:account?secret=…";
+                text <=> AppState.enroll-uri;
+            }
+        }
+
+        // ---- manual ----
+
+        if AppState.enroll-source == 1: VerticalBox {
+            spacing: 6px;
+            Text {
+                text: "Issuer";
+                font-size: 11px;
+                color: #888;
+            }
+            LineEdit {
+                placeholder-text: "e.g. GitHub";
+                text <=> AppState.enroll-issuer;
+            }
+            Text {
+                text: "Account";
+                font-size: 11px;
+                color: #888;
+            }
+            LineEdit {
+                placeholder-text: "e.g. alice@example.com";
+                text <=> AppState.enroll-account;
+            }
+            Text {
+                text: "Secret (base32)";
+                font-size: 11px;
+                color: #888;
+            }
+            LineEdit {
+                placeholder-text: "JBSWY3DPEHPK3PXP…";
+                text <=> AppState.enroll-secret;
+            }
+            HorizontalBox {
+                spacing: 8px;
+                VerticalBox {
+                    spacing: 2px;
+                    Text {
+                        text: "Digits (6-8)";
+                        font-size: 11px;
+                        color: #888;
+                    }
+                    LineEdit {
+                        text <=> AppState.enroll-digits;
+                    }
+                }
+                VerticalBox {
+                    spacing: 2px;
+                    Text {
+                        text: "Period (s)";
+                        font-size: 11px;
+                        color: #888;
+                    }
+                    LineEdit {
+                        text <=> AppState.enroll-period;
+                    }
+                }
+            }
+            Text {
+                text: "TOTP, SHA-1. Defaults (6 digits, 30s) match the common case.";
+                font-size: 10px;
+                color: #555;
+            }
+        }
+
+        // ---- file ----
+
+        if AppState.enroll-source == 2: VerticalBox {
+            spacing: 6px;
+            Text {
+                text: "Pick a file containing otpauth:// URIs (one per line) or an image (PNG/JPEG) with QR codes.";
+                font-size: 12px;
+                color: #888;
+                wrap: word-wrap;
+            }
+            HorizontalBox {
+                spacing: 6px;
+                Button {
+                    text: AppState.enroll-file-loading ? "Reading…" : "Choose file…";
+                    enabled: !AppState.enroll-file-loading;
+                    clicked => { AppState.choose-enroll-file(); }
+                }
+                Text {
+                    text: AppState.enroll-file-path;
+                    font-size: 10px;
+                    color: #555;
+                    vertical-alignment: center;
+                    wrap: word-wrap;
+                }
+            }
+            // Counter + list shown only after the user picks a file.
+            // Slint's eager binding evaluation panics on a CheckBox
+            // nested 3+ levels deep in `if` conditionals (could not
+            // resolve Window default font-size at startup), so the
+            // destroy-source CheckBox lives one level up — inside
+            // `if source == 2` but outside `if rows.length > 0` — and
+            // simply disables itself when there's nothing to delete.
+            if AppState.enroll-file-rows.length > 0: VerticalBox {
+                spacing: 6px;
+                Text {
+                    text: AppState.enroll-file-valid + " ready, " + AppState.enroll-file-weak + " weak (off by default), " + AppState.enroll-file-error + " error";
+                    font-size: 11px;
+                    color: #b0b0b0;
+                }
+                Rectangle {
+                    height: 180px;
+                    background: #1a1a1a;
+                    border-radius: 4px;
+                    ScrollView {
+                        VerticalBox {
+                            spacing: 4px;
+                            padding: 8px;
+                            for row[i] in AppState.enroll-file-rows: HorizontalBox {
+                                spacing: 8px;
+                                if row.error == "": CheckBox {
+                                    checked: row.selected;
+                                    toggled => { AppState.toggle-file-row(i); }
+                                }
+                                if row.error != "": Text {
+                                    text: "✗";
+                                    color: #ff8080;
+                                    font-size: 13px;
+                                    vertical-alignment: center;
+                                }
+                                Text {
+                                    text: row.error != "" ? row.error : (row.issuer + "  " + row.account);
+                                    font-size: 12px;
+                                    color: row.error != "" ? #ff8080 : #d0d0d0;
+                                    wrap: word-wrap;
+                                    overflow: elide;
+                                    horizontal-stretch: 1;
+                                    vertical-alignment: center;
+                                }
+                                if row.weak-bits > 0 && row.error == "": Text {
+                                    text: "⚠ " + row.weak-bits + "b";
+                                    color: #e0c060;
+                                    font-size: 11px;
+                                    vertical-alignment: center;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            CheckBox {
+                text: "⚠ Delete source file after import (zero-fill + unlink — best-effort)";
+                checked <=> AppState.enroll-destroy-source;
+                enabled: AppState.enroll-file-rows.length > 0;
+            }
+        }
+
+        // ---- clipboard image ----
+        //
+        // Reuses enroll-file-rows + the same Save pipeline. The only
+        // pane-local state is the loading flag for the read button;
+        // destroy-source isn't shown because there's no source path
+        // to delete. The decode pipeline (RGBA → decode_rgba →
+        // decode_payloads) shares the same FileRowPreview output the
+        // file picker uses, so the preview list is identical.
+
+        if AppState.enroll-source == 3: VerticalBox {
+            spacing: 6px;
+            Text {
+                text: "Read a QR-code image from the clipboard. Take a screenshot of the QR (or copy an image) first.";
+                font-size: 12px;
+                color: #888;
+                wrap: word-wrap;
+            }
+            HorizontalBox {
+                spacing: 6px;
+                Button {
+                    text: AppState.enroll-clipboard-loading ? "Reading…" : "Read clipboard";
+                    enabled: !AppState.enroll-clipboard-loading;
+                    clicked => { AppState.read-enroll-clipboard(); }
+                }
+                Rectangle { horizontal-stretch: 1; }
+            }
+            if AppState.enroll-file-rows.length > 0: VerticalBox {
+                spacing: 6px;
+                Text {
+                    text: AppState.enroll-file-valid + " ready, " + AppState.enroll-file-weak + " weak (off by default), " + AppState.enroll-file-error + " error";
+                    font-size: 11px;
+                    color: #b0b0b0;
+                }
+                Rectangle {
+                    height: 180px;
+                    background: #1a1a1a;
+                    border-radius: 4px;
+                    ScrollView {
+                        VerticalBox {
+                            spacing: 4px;
+                            padding: 8px;
+                            for row[i] in AppState.enroll-file-rows: HorizontalBox {
+                                spacing: 8px;
+                                if row.error == "": CheckBox {
+                                    checked: row.selected;
+                                    toggled => { AppState.toggle-file-row(i); }
+                                }
+                                if row.error != "": Text {
+                                    text: "✗";
+                                    color: #ff8080;
+                                    font-size: 13px;
+                                    vertical-alignment: center;
+                                }
+                                Text {
+                                    text: row.error != "" ? row.error : (row.issuer + "  " + row.account);
+                                    font-size: 12px;
+                                    color: row.error != "" ? #ff8080 : #d0d0d0;
+                                    wrap: word-wrap;
+                                    overflow: elide;
+                                    horizontal-stretch: 1;
+                                    vertical-alignment: center;
+                                }
+                                if row.weak-bits > 0 && row.error == "": Text {
+                                    text: "⚠ " + row.weak-bits + "b";
+                                    color: #e0c060;
+                                    font-size: 11px;
+                                    vertical-alignment: center;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // ---- camera image ----
+        //
+        // Live preview of the webcam frame with a centered reticle
+        // overlay. The decode pipeline auto-stops the stream the
+        // moment a QR is recognized — no manual capture button.
+        // Status text drives the user's expectations: hint text
+        // while watching, "Got it." on success.
+
+        if AppState.enroll-source == 4: VerticalBox {
+            spacing: 6px;
+            Text {
+                text: AppState.enroll-camera-status != ""
+                    ? AppState.enroll-camera-status
+                    : "Click below, then hold the QR code so it fills the box. Decode runs only inside the reticle.";
+                font-size: 12px;
+                color: #b0b0b0;
+                wrap: word-wrap;
+                horizontal-alignment: center;
+            }
+            // 4:3 preview matching the 640x480 source — no
+            // letterboxing, so the reticle's position in preview
+            // pixels maps cleanly to the decode-ROI in source
+            // pixels. Absolute width/height (not preferred-) so
+            // layout pressure from the rows-preview block can't
+            // shrink it below the planned size.
+            Rectangle {
+                width: 480px;
+                height: 360px;
+                background: #1a1a1a;
+                border-radius: 4px;
+                Image {
+                    source: AppState.enroll-camera-frame;
+                    width: parent.width;
+                    height: parent.height;
+                    image-fit: fill;
+                }
+                // Reticle: 80% of the smaller dimension. Must stay
+                // in lockstep with `RETICLE_RATIO` in camera.rs —
+                // that constant defines the actual decode region.
+                // Background QRs (sticker on the wall, screen behind
+                // user) outside this box are not decoded.
+                Rectangle {
+                    width: min(parent.width, parent.height) * 0.8;
+                    height: self.width;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    background: transparent;
+                    border-color: #4a90e2;
+                    border-width: 2px;
+                    border-radius: 4px;
+                }
+            }
+            HorizontalBox {
+                spacing: 6px;
+                Rectangle { horizontal-stretch: 1; }
+                if !AppState.enroll-camera-watching: Button {
+                    text: "Watch for QR code";
+                    primary: true;
+                    clicked => { AppState.start-camera-watch(); }
+                }
+                if AppState.enroll-camera-watching: Button {
+                    text: "Stop";
+                    clicked => { AppState.stop-camera-watch(); }
+                }
+                Rectangle { horizontal-stretch: 1; }
+            }
+            if AppState.enroll-file-rows.length > 0: VerticalBox {
+                spacing: 6px;
+                Text {
+                    text: AppState.enroll-file-valid + " ready, " + AppState.enroll-file-weak + " weak (off by default), " + AppState.enroll-file-error + " error";
+                    font-size: 11px;
+                    color: #b0b0b0;
+                }
+                Rectangle {
+                    height: 120px;
+                    background: #1a1a1a;
+                    border-radius: 4px;
+                    ScrollView {
+                        VerticalBox {
+                            spacing: 4px;
+                            padding: 8px;
+                            for row[i] in AppState.enroll-file-rows: HorizontalBox {
+                                spacing: 8px;
+                                if row.error == "": CheckBox {
+                                    checked: row.selected;
+                                    toggled => { AppState.toggle-file-row(i); }
+                                }
+                                if row.error != "": Text {
+                                    text: "✗";
+                                    color: #ff8080;
+                                    font-size: 13px;
+                                    vertical-alignment: center;
+                                }
+                                Text {
+                                    text: row.error != "" ? row.error : (row.issuer + "  " + row.account);
+                                    font-size: 12px;
+                                    color: row.error != "" ? #ff8080 : #d0d0d0;
+                                    wrap: word-wrap;
+                                    overflow: elide;
+                                    horizontal-stretch: 1;
+                                    vertical-alignment: center;
+                                }
+                                if row.weak-bits > 0 && row.error == "": Text {
+                                    text: "⚠ " + row.weak-bits + "b";
+                                    color: #e0c060;
+                                    font-size: 11px;
+                                    vertical-alignment: center;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if AppState.enroll-error != "": Text {
+            text: AppState.enroll-error;
+            color: #ff8080;
+            font-size: 12px;
+            wrap: word-wrap;
+        }
+
+        Rectangle { vertical-stretch: 1; }
+
+        HorizontalBox {
+            spacing: 12px;
+            Rectangle { horizontal-stretch: 1; }
+            Button {
+                text: AppState.enroll-saving ? "Saving…" : "Save";
+                primary: true;
+                enabled: !AppState.enroll-saving;
+                clicked => {
+                    // Sources 2 (file), 3 (clipboard), 4 (camera)
+                    // all populate enroll-file-rows and dispatch
+                    // through the same multi-row commit path.
+                    if AppState.enroll-source == 2
+                        || AppState.enroll-source == 3
+                        || AppState.enroll-source == 4 {
+                        AppState.save-enroll-file();
+                    } else {
+                        AppState.save-enroll();
+                    }
+                }
+            }
+        }
+    }
+}

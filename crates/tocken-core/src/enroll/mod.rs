@@ -14,6 +14,7 @@
 
 pub mod error;
 pub mod file;
+pub mod migration;
 pub mod parse;
 pub mod qr;
 pub mod validate;

@@ -1,0 +1,365 @@
+import { Button, VerticalBox, HorizontalBox, LineEdit, ScrollView } from "std-widgets.slint";
+import { AppState } from "state.slint";
+
+// First-run wizard: welcome → passphrase → confirm → yubikey →
+// location → done. Each `step` is a sibling block selected by
+// `AppState.step`. Outer header text is rendered by the parent
+// `MainWindow` only when `mode == 0`, so this component focuses on
+// the per-step body.
+export component WizardPane inherits VerticalBox {
+    spacing: 14px;
+
+    // ---- step 0: welcome ----
+
+    if AppState.step == 0: VerticalBox {
+        spacing: 14px;
+        alignment: center;
+        Text {
+            text: "Welcome";
+            font-size: 28px;
+            color: #f0f0f0;
+            horizontal-alignment: center;
+        }
+        Text {
+            text: "tocken keeps your TOTP seeds in an age-encrypted file unlocked by a YubiKey. The next steps generate a recovery passphrase, provision your key, and create the encrypted store.";
+            font-size: 13px;
+            color: #b0b0b0;
+            wrap: word-wrap;
+            horizontal-alignment: center;
+        }
+        Rectangle { height: 12px; }
+        Button {
+            text: "Begin";
+            primary: true;
+            clicked => {
+                AppState.step = 1;
+                AppState.generate-passphrase();
+            }
+        }
+    }
+
+    // ---- step 1: passphrase ----
+
+    if AppState.step == 1: VerticalBox {
+        spacing: 12px;
+        Text {
+            text: "Recovery passphrase";
+            font-size: 22px;
+            color: #f0f0f0;
+            horizontal-alignment: center;
+        }
+        Text {
+            text: "Write this down on paper. It is the only fallback if your YubiKey is lost.";
+            font-size: 12px;
+            color: #b0b0b0;
+            wrap: word-wrap;
+            horizontal-alignment: center;
+        }
+        Rectangle {
+            height: 80px;
+            background: #1c1c1c;
+            border-radius: 6px;
+            Text {
+                text: AppState.passphrase;
+                font-size: 18px;
+                color: #d0e8ff;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                wrap: word-wrap;
+            }
+        }
+        HorizontalBox {
+            spacing: 12px;
+            Button {
+                text: "Regenerate";
+                clicked => {
+                    AppState.passphrase-copied = false;
+                    AppState.generate-passphrase();
+                }
+            }
+            Button {
+                text: AppState.passphrase-copied ? "Copied ✓" : "Copy";
+                clicked => { AppState.copy-passphrase(); }
+            }
+            Button {
+                text: "I've written it down";
+                primary: true;
+                clicked => {
+                    AppState.passphrase-confirm = "";
+                    AppState.confirm-error = false;
+                    AppState.step = 2;
+                }
+            }
+        }
+    }
+
+    // ---- step 2: confirm passphrase ----
+
+    if AppState.step == 2: VerticalBox {
+        spacing: 12px;
+        Text {
+            text: "Confirm passphrase";
+            font-size: 22px;
+            color: #f0f0f0;
+            horizontal-alignment: center;
+        }
+        Text {
+            text: "Type the passphrase you wrote down.";
+            font-size: 12px;
+            color: #b0b0b0;
+            horizontal-alignment: center;
+        }
+        LineEdit {
+            placeholder-text: "six words separated by spaces";
+            text <=> AppState.passphrase-confirm;
+        }
+        if AppState.confirm-error: Text {
+            text: "Doesn't match. Try again.";
+            color: #ff8080;
+            font-size: 12px;
+            horizontal-alignment: center;
+        }
+        HorizontalBox {
+            spacing: 12px;
+            Button {
+                text: "Back";
+                clicked => { AppState.step = 1; }
+            }
+            Button {
+                text: "Continue";
+                primary: true;
+                clicked => {
+                    if AppState.passphrase-confirm == AppState.passphrase {
+                        AppState.confirm-error = false;
+                        AppState.yubikey-detected = false;
+                        AppState.yubikey-configured = false;
+                        AppState.yubikey-recipient = "";
+                        AppState.yubikey-serial = "";
+                        AppState.yubikey-error = "";
+                        AppState.step = 3;
+                        AppState.detect-yubikey();
+                    } else {
+                        AppState.confirm-error = true;
+                    }
+                }
+            }
+        }
+    }
+
+    // ---- step 3: yubikey ----
+
+    if AppState.step == 3: VerticalBox {
+        spacing: 10px;
+        Text {
+            text: "YubiKey";
+            font-size: 22px;
+            color: #f0f0f0;
+            horizontal-alignment: center;
+        }
+
+        if !AppState.yubikey-detected && AppState.yubikey-error == "": Text {
+            text: "Probing age-plugin-yubikey…";
+            color: #b0b0b0;
+            font-size: 13px;
+            horizontal-alignment: center;
+        }
+
+        if AppState.yubikey-detected && AppState.yubikey-configured: VerticalBox {
+            spacing: 6px;
+            Text {
+                text: "Detected configured key.";
+                color: #c0e0c0;
+                font-size: 13px;
+                horizontal-alignment: center;
+            }
+            Text {
+                text: "Serial: " + AppState.yubikey-serial;
+                color: #888;
+                font-size: 11px;
+                horizontal-alignment: center;
+            }
+            Text {
+                text: AppState.yubikey-recipient;
+                color: #888;
+                font-size: 10px;
+                wrap: word-wrap;
+                horizontal-alignment: center;
+            }
+        }
+
+        if AppState.yubikey-detected && !AppState.yubikey-configured && !AppState.provision-in-progress && AppState.yubikey-recipient == "": VerticalBox {
+            spacing: 8px;
+            Text {
+                text: "No identity slot found. Provision generates a new one (touch policy: always; pin policy: never; slot 1).";
+                color: #b0b0b0;
+                font-size: 13px;
+                wrap: word-wrap;
+                horizontal-alignment: center;
+            }
+            Button {
+                text: "Provision YubiKey";
+                primary: true;
+                clicked => {
+                    AppState.provision-log = "";
+                    AppState.yubikey-error = "";
+                    AppState.provision-yubikey();
+                }
+            }
+        }
+
+        if AppState.provision-in-progress || AppState.provision-log != "": VerticalBox {
+            spacing: 6px;
+            Text {
+                text: AppState.provision-in-progress ? "Provisioning… touch the YubiKey when it blinks." : "Provisioning complete.";
+                color: #d0e8ff;
+                font-size: 12px;
+                horizontal-alignment: center;
+            }
+            Rectangle {
+                height: 140px;
+                background: #1a1a1a;
+                border-radius: 4px;
+                ScrollView {
+                    Text {
+                        text: AppState.provision-log;
+                        color: #a0e0a0;
+                        font-size: 10px;
+                        wrap: word-wrap;
+                    }
+                }
+            }
+        }
+
+        if AppState.yubikey-error != "": Text {
+            text: AppState.yubikey-error;
+            color: #ff8080;
+            font-size: 12px;
+            wrap: word-wrap;
+            horizontal-alignment: center;
+        }
+
+        HorizontalBox {
+            spacing: 12px;
+            Button {
+                text: "Back";
+                enabled: !AppState.provision-in-progress;
+                clicked => { AppState.step = 2; }
+            }
+            Button {
+                text: "Continue";
+                primary: true;
+                enabled: AppState.yubikey-recipient != "" && !AppState.provision-in-progress;
+                clicked => { AppState.step = 4; }
+            }
+        }
+    }
+
+    // ---- step 4: location ----
+
+    if AppState.step == 4: VerticalBox {
+        spacing: 8px;
+        Text {
+            text: "Storage location";
+            font-size: 22px;
+            color: #f0f0f0;
+            horizontal-alignment: center;
+        }
+        Text {
+            text: "Files will be created at:";
+            color: #b0b0b0;
+            font-size: 13px;
+            horizontal-alignment: center;
+        }
+        Text {
+            text: AppState.store-path;
+            color: #d0e8ff;
+            font-size: 11px;
+            wrap: word-wrap;
+            horizontal-alignment: center;
+        }
+        Text {
+            text: AppState.master-path;
+            color: #d0e8ff;
+            font-size: 11px;
+            wrap: word-wrap;
+            horizontal-alignment: center;
+        }
+        Text {
+            text: AppState.config-path;
+            color: #d0e8ff;
+            font-size: 11px;
+            wrap: word-wrap;
+            horizontal-alignment: center;
+        }
+        if AppState.finalize-error != "": Text {
+            text: AppState.finalize-error;
+            color: #ff8080;
+            font-size: 12px;
+            wrap: word-wrap;
+            horizontal-alignment: center;
+        }
+        HorizontalBox {
+            spacing: 12px;
+            Button {
+                text: "Back";
+                enabled: !AppState.finalize-in-progress;
+                clicked => { AppState.step = 3; }
+            }
+            Button {
+                text: AppState.finalize-in-progress ? "Creating store…" : "Create store";
+                primary: true;
+                enabled: !AppState.finalize-in-progress;
+                clicked => { AppState.finalize(); }
+            }
+        }
+    }
+
+    // ---- step 5: done ----
+
+    if AppState.step == 5: VerticalBox {
+        spacing: 12px;
+        Text {
+            text: "Setup complete";
+            font-size: 22px;
+            color: #c0e0c0;
+            horizontal-alignment: center;
+        }
+        Text {
+            text: "Your encrypted store is ready.";
+            color: #b0b0b0;
+            font-size: 13px;
+            horizontal-alignment: center;
+        }
+        if AppState.pin-puk-message != "": VerticalBox {
+            spacing: 4px;
+            Text {
+                text: "YubiKey provisioning notes:";
+                color: #b0b0b0;
+                font-size: 12px;
+                horizontal-alignment: center;
+            }
+            Rectangle {
+                background: #1a1a1a;
+                border-radius: 4px;
+                Text {
+                    text: AppState.pin-puk-message;
+                    color: #d0e8ff;
+                    font-size: 11px;
+                    wrap: word-wrap;
+                }
+            }
+        }
+        Button {
+            text: "Continue";
+            primary: true;
+            clicked => {
+                // Hand off to the unlock pane. The store was just
+                // created — the round-trip through the YubiKey is
+                // verified by an explicit unlock here.
+                AppState.passphrase = "";
+                AppState.passphrase-confirm = "";
+                AppState.mode = 1;
+            }
+        }
+    }
+}

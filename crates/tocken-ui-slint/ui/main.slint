@@ -1,0 +1,279 @@
+import { Button, CheckBox, VerticalBox, HorizontalBox, ScrollView } from "std-widgets.slint";
+import { AppState, EntryRow, FilePreviewRow } from "state.slint";
+import { WizardPane } from "wizard.slint";
+import { EnrollmentPane } from "enrollment.slint";
+
+// Re-export so `slint::include_modules!()` exposes AppState (the
+// global) and the FilePreviewRow struct to Rust. Without this,
+// `ui.global::<AppState>()` fails to compile because the Rust type
+// isn't generated — Slint only emits bindings for items the main
+// file directly uses or re-exports.
+export { AppState, FilePreviewRow }
+
+// Top-level window. Switches on `AppState.mode` between the four
+// pane families. Wizard and Enrollment are heavy enough to live in
+// their own files (`wizard.slint`, `enrollment.slint`); locked +
+// code-panel are short enough to stay inline here.
+export component MainWindow inherits Window {
+    title: "tocken";
+    preferred-width: 480px;
+    preferred-height: 580px;
+    background: #111;
+
+    VerticalBox {
+        padding: 24px;
+        spacing: 14px;
+
+        if AppState.mode == 0: Text {
+            text: "tocken first-run setup";
+            font-size: 12px;
+            color: #777;
+            horizontal-alignment: center;
+        }
+
+        if AppState.mode == 0: WizardPane {}
+
+        // ---------- mode 1 / locked ----------
+
+        if AppState.mode == 1: VerticalBox {
+            spacing: 14px;
+            alignment: center;
+            Text {
+                text: "tocken";
+                font-size: 28px;
+                color: #f0f0f0;
+                horizontal-alignment: center;
+            }
+            Text {
+                text: AppState.unlocking ? "Touch your YubiKey when it blinks…" : "Touch your YubiKey to unlock.";
+                font-size: 13px;
+                color: #b0b0b0;
+                wrap: word-wrap;
+                horizontal-alignment: center;
+            }
+            if AppState.unlock-error != "": Text {
+                text: AppState.unlock-error;
+                color: #ff8080;
+                font-size: 12px;
+                wrap: word-wrap;
+                horizontal-alignment: center;
+            }
+            Rectangle { height: 8px; }
+            Button {
+                text: AppState.unlocking ? "Awaiting touch…" : "Unlock";
+                primary: true;
+                enabled: !AppState.unlocking;
+                clicked => {
+                    AppState.unlock-error = "";
+                    AppState.unlock();
+                }
+            }
+        }
+
+        // ---------- mode 2 / remove confirmation ----------
+
+        if AppState.mode == 2 && AppState.confirming-remove: VerticalBox {
+            spacing: 14px;
+            alignment: center;
+            Text {
+                text: "Remove " + AppState.selected-count + " " + (AppState.selected-count == 1 ? "entry" : "entries") + "?";
+                font-size: 22px;
+                color: #f0f0f0;
+                horizontal-alignment: center;
+            }
+            Text {
+                text: "The TOTP secret will not be recoverable from the store after deletion. To use these codes again you would need to re-enroll from the original source (issuer's QR or URI).";
+                font-size: 12px;
+                color: #b0b0b0;
+                wrap: word-wrap;
+                horizontal-alignment: center;
+            }
+            HorizontalBox {
+                spacing: 12px;
+                Button {
+                    text: "Cancel";
+                    clicked => { AppState.confirming-remove = false; }
+                }
+                Button {
+                    text: "Remove";
+                    primary: true;
+                    clicked => {
+                        AppState.confirming-remove = false;
+                        AppState.confirm-remove();
+                    }
+                }
+            }
+        }
+
+        // ---------- mode 2 / unlocked code panel ----------
+
+        if AppState.mode == 2 && !AppState.confirming-remove: VerticalBox {
+            spacing: 8px;
+
+            HorizontalBox {
+                spacing: 8px;
+                Text {
+                    text: "tocken";
+                    font-size: 14px;
+                    color: #888;
+                    vertical-alignment: center;
+                }
+                Rectangle { horizontal-stretch: 1; }
+                Text {
+                    text: AppState.entries.length == 0 ? "" : ("re-lock " + AppState.relock-seconds + "s");
+                    font-size: 11px;
+                    color: #555;
+                    vertical-alignment: center;
+                }
+            }
+
+            // ScrollView fills the remaining vertical space, so the
+            // bottom action row stays reachable even when the entry
+            // list overflows. Empty-state lives inside the ScrollView
+            // since it's a content alternative for the same region.
+            ScrollView {
+                vertical-stretch: 1;
+                VerticalBox {
+                    spacing: 6px;
+                    // Pack entries at the top with their preferred
+                    // height. Default `stretch` distributes leftover
+                    // vertical space across children, which with a
+                    // single entry visibly inflated the gap between
+                    // the code and its countdown bar.
+                    alignment: start;
+
+                    if AppState.entries.length == 0: VerticalBox {
+                        spacing: 6px;
+                        alignment: center;
+                        Rectangle { height: 40px; }
+                        Text {
+                            text: "No entries yet.";
+                            font-size: 16px;
+                            color: #b0b0b0;
+                            horizontal-alignment: center;
+                        }
+                        Text {
+                            text: "Click + Add to enroll your first TOTP.";
+                            font-size: 11px;
+                            color: #555;
+                            horizontal-alignment: center;
+                        }
+                    }
+
+                    for entry in AppState.entries: VerticalBox {
+                        spacing: 4px;
+                        padding-top: 6px;
+                        padding-bottom: 6px;
+                        HorizontalBox {
+                            spacing: 12px;
+                            if AppState.actions-active: CheckBox {
+                                checked: entry.selected;
+                                toggled => {
+                                    AppState.toggle-entry-selected(entry.id);
+                                }
+                            }
+                            VerticalBox {
+                                spacing: 0px;
+                                Text {
+                                    text: entry.issuer;
+                                    color: #f0f0f0;
+                                    font-size: 13px;
+                                }
+                                Text {
+                                    text: entry.account;
+                                    color: #888;
+                                    font-size: 10px;
+                                }
+                            }
+                            Rectangle { horizontal-stretch: 1; }
+                            VerticalBox {
+                                spacing: 0px;
+                                alignment: center;
+                                Text {
+                                    text: entry.code;
+                                    color: #d0e8ff;
+                                    font-size: 22px;
+                                    horizontal-alignment: right;
+                                }
+                                Text {
+                                    text: entry.digits + "d / " + entry.period + "s";
+                                    color: #555;
+                                    font-size: 9px;
+                                    horizontal-alignment: right;
+                                }
+                            }
+                        }
+                        Rectangle {
+                            height: 3px;
+                            background: #1a1a1a;
+                            border-radius: 1.5px;
+                            Rectangle {
+                                x: 0;
+                                y: 0;
+                                height: 3px;
+                                background: #4a90e2;
+                                width: parent.width * entry.time-remaining / max(entry.period, 1);
+                                border-radius: 1.5px;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Transient toast for "Coming next session" buttons.
+            if AppState.action-toast != "": Text {
+                text: AppState.action-toast;
+                color: #d0e8ff;
+                font-size: 11px;
+                horizontal-alignment: center;
+                wrap: word-wrap;
+            }
+
+            // Bottom action bar — swaps based on actions-active.
+            if !AppState.actions-active: HorizontalBox {
+                spacing: 8px;
+                Button {
+                    text: "Actions";
+                    enabled: AppState.entries.length > 0;
+                    clicked => { AppState.enter-actions(); }
+                }
+                Button {
+                    text: "+ Add";
+                    clicked => { AppState.open-enroll(); }
+                }
+                Rectangle { horizontal-stretch: 1; }
+                Button {
+                    text: "Lock";
+                    clicked => { AppState.lock(); }
+                }
+            }
+            if AppState.actions-active: HorizontalBox {
+                spacing: 8px;
+                Button {
+                    text: "Done";
+                    clicked => { AppState.exit-actions(); }
+                }
+                Rectangle { horizontal-stretch: 1; }
+                Button {
+                    text: AppState.selected-count > 0 ? ("Remove (" + AppState.selected-count + ")") : "Remove";
+                    enabled: AppState.selected-count > 0;
+                    clicked => { AppState.confirming-remove = true; }
+                }
+                Button {
+                    text: "Update";
+                    enabled: AppState.selected-count == 1;
+                    clicked => { AppState.show-coming-soon("Update lands next session — needs an edit form."); }
+                }
+                Button {
+                    text: "Comment";
+                    enabled: AppState.selected-count == 1;
+                    clicked => { AppState.show-coming-soon("Comment lands next session — needs a `comment` field on the store schema."); }
+                }
+            }
+        }
+
+        // ---------- mode 3 / enrollment ----------
+
+        if AppState.mode == 3: EnrollmentPane {}
+    }
+}

@@ -24,8 +24,19 @@ const DEFAULT_ALG: Algorithm = Algorithm::Sha1;
 /// Parse an `otpauth://` URI into an `EnrollForm`. Does not run
 /// `validate::*` — call sites combine the two so a single error path
 /// surfaces both URI-shape problems and field-level validation.
+///
+/// Permissive intake: all ASCII/Unicode whitespace is stripped from
+/// the input before URL parsing. Real-world paste sources (chat,
+/// email word-wrap, wiki rendering) routinely introduce line breaks
+/// or accidental spaces — e.g. `digits =8` silently becomes a
+/// different (unrecognized) key in `query_pairs()`, dropping the
+/// param and falling back to the default. otpauth URIs never carry
+/// literal whitespace (any space inside a value must be
+/// percent-encoded as `%20`), so dropping it is safe and matches the
+/// spirit of `normalize_secret` for the manual-entry path.
 pub fn parse_otpauth_uri(input: &str) -> Result<EnrollForm, EnrollError> {
-    let trimmed = input.trim();
+    let cleaned: String = input.chars().filter(|c| !c.is_whitespace()).collect();
+    let trimmed = cleaned.as_str();
 
     if trimmed.starts_with("otpauth-migration://") {
         return Err(EnrollError::MigrationUriNotSupported);
@@ -249,5 +260,28 @@ mod tests {
             parse_otpauth_uri(uri),
             Err(EnrollError::InvalidUri { .. })
         ));
+    }
+
+    #[test]
+    fn space_before_param_value_is_tolerated() {
+        // Real-world paste corruption: a space crept in before `=8`,
+        // causing `query_pairs()` to expose `digits ` (with trailing
+        // space) as a distinct key from `digits`. Without sanitization
+        // the param is silently dropped and the form falls back to
+        // the default of 6.
+        let uri = "otpauth://totp/Bank:user@example.com?secret=MFRGGZDFMZTWQ2LKNNWG23TPMRSXIIDB&digits =8&period=60";
+        let form = parse_otpauth_uri(uri).unwrap();
+        assert_eq!(form.digits, 8);
+        assert_eq!(form.period, 60);
+    }
+
+    #[test]
+    fn line_breaks_inside_uri_are_tolerated() {
+        // Email/chat word-wrap can split a URI mid-string. The cleanup
+        // pass reassembles it before `Url::parse` sees it.
+        let uri = "otpauth://totp/Bank:alice@example.com?\nsecret=JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP\n&digits=8";
+        let form = parse_otpauth_uri(uri).unwrap();
+        assert_eq!(form.digits, 8);
+        assert_eq!(form.account, "alice@example.com");
     }
 }

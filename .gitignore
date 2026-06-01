@@ -5,3 +5,6 @@ secrets.txt.bak.*
 
 # local machine state
 .claude/
+
+# rust build artifacts
+/target/

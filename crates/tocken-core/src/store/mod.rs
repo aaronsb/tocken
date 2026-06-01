@@ -35,6 +35,8 @@ pub enum StoreError {
     RecipientsMetadata(String),
     #[error("paths: {0}")]
     Paths(#[from] paths::PathError),
+    #[error("store already exists at {0} — refusing to overwrite")]
+    AlreadyExists(String),
 }
 
 /// Boxed recipient suitable for storing in `Store::extra_recipients`.
@@ -79,6 +81,17 @@ impl Store {
         passphrase: SecretString,
         extra_recipients: Vec<NamedRecipient>,
     ) -> Result<Self, StoreError> {
+        // Refuse if either of the two cryptographically-significant
+        // files already exists. Silent overwrite would generate a new
+        // master identity and orphan whatever the user already has.
+        if paths.master.exists() {
+            return Err(StoreError::AlreadyExists(
+                paths.master.display().to_string(),
+            ));
+        }
+        if paths.store.exists() {
+            return Err(StoreError::AlreadyExists(paths.store.display().to_string()));
+        }
         paths.ensure_dirs()?;
         let master = x25519::Identity::generate();
         let master_public = master.to_public();
@@ -305,6 +318,19 @@ mod tests {
 
         let opened = Store::open_with_passphrase(paths, passphrase).unwrap();
         assert!(opened.entries().is_empty());
+    }
+
+    #[test]
+    fn create_refuses_to_overwrite_existing_store() {
+        let (_tmp, paths) = tmp_paths();
+        let passphrase = SecretString::from("recovery");
+        let _ = Store::create(paths.clone(), passphrase.clone(), Vec::new()).unwrap();
+
+        match Store::create(paths, passphrase, Vec::new()) {
+            Err(StoreError::AlreadyExists(_)) => {}
+            Err(other) => panic!("expected AlreadyExists, got {other:?}"),
+            Ok(_) => panic!("expected AlreadyExists, got Ok"),
+        }
     }
 
     #[test]
