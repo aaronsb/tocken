@@ -1,5 +1,6 @@
 # tocken
 
+![License](https://img.shields.io/github/license/aaronsb/tocken)
 ![GitHub stars](https://img.shields.io/github/stars/aaronsb/tocken?style=social)
 ![Latest Release](https://img.shields.io/github/v/release/aaronsb/tocken?include_prereleases&label=version)
 
